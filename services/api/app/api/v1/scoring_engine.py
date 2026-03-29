@@ -176,6 +176,13 @@ class ScoringEngine:
                 if not self._passes_jurisdiction_gate(politician, event, slot.slot):
                     continue
 
+                # Week modifier: whitelist and multipliers
+                week_mods = self._get_week_modifiers(week)
+                if week_mods:
+                    whitelist = week_mods.get("event_type_whitelist")
+                    if whitelist and event.event_type not in whitelist:
+                        continue
+
                 # Look up scoring rule
                 rule = self._rules.get((event.event_type, politician.asset_type))
                 if rule is None:
@@ -211,6 +218,12 @@ class ScoringEngine:
                     (obj.bonus for obj in active_objectives if event.event_type in obj.event_types),
                     default=0,
                 )
+
+                # Week modifier multipliers (event_type and asset_type)
+                if week_mods:
+                    event_mult = week_mods.get("multipliers", {}).get(event.event_type, 1.0)
+                    asset_mult = week_mods.get("asset_multipliers", {}).get(politician.asset_type, 1.0)
+                    points_f = points_f * event_mult * asset_mult
 
                 final = int(round(points_f)) + policy_bonus
                 final = max(self.min_pts, min(self.max_pts, final))
@@ -317,6 +330,13 @@ class ScoringEngine:
                     if not self._passes_story_jurisdiction_gate(pol, story, slot.slot):
                         continue
 
+                    # Week modifier: whitelist and multipliers
+                    week_mods = self._get_week_modifiers(week)
+                    if week_mods:
+                        whitelist = week_mods.get("event_type_whitelist")
+                        if whitelist and story.event_type not in whitelist:
+                            continue
+
                     # Scoring rule lookup
                     rule = self._rules.get((story.event_type, pol.asset_type))
                     if rule is None:
@@ -341,6 +361,11 @@ class ScoringEngine:
 
                     base = rule.base_points + rule.affinity_bonus
                     raw = base * sig_mult * followup_disc * sentiment_fact * conf_mult
+                    # Week modifier multipliers (event_type and asset_type)
+                    if week_mods:
+                        event_mult = week_mods.get("multipliers", {}).get(story.event_type, 1.0)
+                        asset_mult = week_mods.get("asset_multipliers", {}).get(pol.asset_type, 1.0)
+                        raw = raw * event_mult * asset_mult
                     final = int(round(raw + policy_bonus * sig_mult))
                     final = max(-story_max_points, min(story_max_points, final))
                     # Also apply weekly per-asset caps
@@ -608,6 +633,22 @@ class ScoringEngine:
         return results
 
     # ── internal ─────────────────────────────────────────────────────────────
+
+    def _get_week_modifiers(self, week: int) -> dict | None:
+        """
+        Load week_modifiers from system_config and return the entry for the given
+        week number (if one exists). Returns None if no modifier is configured for
+        this week.
+        """
+        from app.api.v1.persistent_store import SystemConfigModel  # noqa: PLC0415
+
+        cfg = self.session.get(SystemConfigModel, "week_modifiers")
+        if cfg is None:
+            return None
+        mods = cfg.value_json
+        if not isinstance(mods, dict):
+            return None
+        return mods.get(str(week))
 
     @staticmethod
     def _confidence_multiplier(attribution_type: str, confidence: float) -> float:

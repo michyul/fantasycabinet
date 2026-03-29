@@ -357,6 +357,15 @@ class DailyDigestOut(BaseModel):
     total_articles_today: int
 
 
+class WeekThemeOut(BaseModel):
+    week: int
+    label: str
+    description: str
+    multipliers: dict = Field(default_factory=dict)
+    asset_multipliers: dict = Field(default_factory=dict)
+    event_type_whitelist: list[str] | None = None
+
+
 # ── Canonical domain-language aliases (domain-language-contract.md) ───────────────
 # These names are used in all new API routes and UI.
 CabinetScopeCreate = LeagueCreate

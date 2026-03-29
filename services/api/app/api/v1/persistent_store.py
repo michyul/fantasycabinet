@@ -355,6 +355,16 @@ class PersistentStore:
                 "VALUES ('story_rescore_threshold', '1.5', NOW(), 'system') "
                 "ON CONFLICT (key) DO NOTHING"
             )
+            # Seed week_modifiers parliamentary calendar if not present
+            connection.exec_driver_sql(
+                "INSERT INTO system_config (key, value, updated_at, updated_by) "
+                "VALUES ('week_modifiers', "
+                "'{\"3\": {\"label\": \"Budget Week\", \"description\": \"The federal budget drops — policy and executive events score higher.\", \"multipliers\": {\"policy\": 1.5, \"executive\": 1.3}, \"asset_multipliers\": {}}, "
+                "\"7\": {\"label\": \"Opposition Day\", \"description\": \"Opposition gets the floor — opposition asset types score 50%% more.\", \"multipliers\": {}, \"asset_multipliers\": {\"opposition\": 1.5}}, "
+                "\"10\": {\"label\": \"Prorogation\", \"description\": \"Parliament is prorogued — only parliamentary events score.\", \"multipliers\": {}, \"asset_multipliers\": {}, \"event_type_whitelist\": [\"parliamentary\", \"intergovernmental\"]}}',"
+                " NOW(), 'system') "
+                "ON CONFLICT (key) DO NOTHING"
+            )
             # Rename legacy scope names
             connection.exec_driver_sql(
                 "UPDATE leagues SET name = 'National Politics \u2014 2026 Season' "
