@@ -1,4 +1,4 @@
-.PHONY: up down logs ps build
+.PHONY: up down logs ps build test test-api test-web
 
 up:
 	docker compose up --build
@@ -14,3 +14,11 @@ ps:
 
 build:
 	docker compose build
+
+test: test-api test-web
+
+test-api:
+	cd services/api && python -m pytest tests/ -v
+
+test-web:
+	cd apps/web && npm test
