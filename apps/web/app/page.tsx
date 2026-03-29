@@ -15,12 +15,34 @@ type StandingsRow = {
   cabinet_name: string;
   total_points: number;
   rank: number;
+  participation_streak: number;
+  positive_streak: number;
 };
 
 type StandingsResponse = {
   scope_id: string;
   week: number;
   items: StandingsRow[];
+};
+
+type AchievementOut = {
+  id: string;
+  team_id: string;
+  achievement_id: string;
+  name: string;
+  description: string;
+  earned_at: string;
+  week: number;
+  metadata: Record<string, unknown>;
+};
+
+type ManagerStatsOut = {
+  team_id: string;
+  participation_streak: number;
+  positive_streak: number;
+  longest_participation_streak: number;
+  longest_positive_streak: number;
+  updated_at?: string | null;
 };
 
 type Cabinet = {
@@ -243,6 +265,8 @@ export default function HomePage() {
   const [dailyDigest, setDailyDigest]                   = useState<DailyDigest | null>(null);
   const [benchSignals, setBenchSignals]                 = useState<BenchSignal[]>([]);
   const [weekTheme, setWeekTheme]                       = useState<WeekTheme | null>(null);
+  const [achievements, setAchievements]                 = useState<AchievementOut[]>([]);
+  const [cabinetStats, setCabinetStats]                 = useState<ManagerStatsOut | null>(null);
 
   const governingSeats  = portfolio.filter((s) => s.lineup_status === "active");
   const monitoringSeats = portfolio.filter((s) => s.lineup_status === "bench");
@@ -378,6 +402,22 @@ export default function HomePage() {
       const b = await readJson<WeekTheme | null>(`${apiBase}/api/v1/cabinet-scopes/${scopeId}/week-theme`);
       setWeekTheme(b);
     } catch { setWeekTheme(null); }
+  }
+
+  async function loadAchievements(cabinetId: string) {
+    if (!cabinetId) { setAchievements([]); return; }
+    try {
+      const b = await readJson<{ items: AchievementOut[] }>(`${apiBase}/api/v1/cabinets/${cabinetId}/achievements`);
+      setAchievements(b.items);
+    } catch { setAchievements([]); }
+  }
+
+  async function loadCabinetStats(cabinetId: string) {
+    if (!cabinetId) { setCabinetStats(null); return; }
+    try {
+      const b = await readJson<ManagerStatsOut>(`${apiBase}/api/v1/cabinets/${cabinetId}/stats`);
+      setCabinetStats(b);
+    } catch { setCabinetStats(null); }
   }
 
   // ── MP seat assignment ────────────────────────────────────────────────────
@@ -585,6 +625,8 @@ export default function HomePage() {
       void loadCabinetObjectives(selectedCabinetId);
       void loadDailyDigest(selectedCabinetId);
       void loadBenchSignals(selectedCabinetId);
+      void loadAchievements(selectedCabinetId);
+      void loadCabinetStats(selectedCabinetId);
       if (selectedScopeId) void loadLedger(selectedCabinetId, selectedScopeId);
     }
   }, [selectedCabinetId, selectedScopeId]);
@@ -917,21 +959,36 @@ export default function HomePage() {
         </div>
         {selectedScope && <p className="muted" style={{ marginTop: "0.25rem" }}>Format: {selectedScope.format} · Week {selectedScope.current_week}</p>}
         {standings && standings.items.length > 0 ? (
-          <div className="leaderboard">
-            {standings.items.map((row) => (
-              <div key={row.cabinet_id} className={`leaderboard-row${myCabinetIds.has(row.cabinet_id) ? " leaderboard-row--mine" : ""}`}>
-                {row.rank <= 3
-                  ? <span className="rank-medal" aria-label={`Rank ${row.rank}`}>{RANK_MEDALS[row.rank - 1]}</span>
-                  : <span className="rank-num" aria-label={`Rank ${row.rank}`}>{row.rank}</span>
-                }
-                <span className="lb-cabinet-name">{row.cabinet_name}</span>
-                <div className="score-bar-track">
-                  <div className="score-bar-fill" style={{ width: `${(row.total_points / maxStandingsPts) * 100}%` }} />
-                </div>
-                <span className="lb-points">+{row.total_points}</span>
-              </div>
-            ))}
-          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Cabinet</th>
+                <th>Points</th>
+                <th title="Consecutive weeks with a mandate change">🗳 Streak</th>
+                <th title="Consecutive weeks with positive score">📈 Streak</th>
+              </tr>
+            </thead>
+            <tbody>
+              {standings.items.map((row) => (
+                <tr key={row.cabinet_id}>
+                  <td>{row.rank}</td>
+                  <td>{row.cabinet_name}</td>
+                  <td>{row.total_points}</td>
+                  <td>
+                    {row.participation_streak > 0
+                      ? <span aria-label={`${row.participation_streak}-week active mandate streak`} title={`${row.participation_streak}-week active mandate streak`}>🗳 {row.participation_streak}</span>
+                      : <span className="muted" aria-label="No active mandate streak">—</span>}
+                  </td>
+                  <td>
+                    {row.positive_streak > 0
+                      ? <span aria-label={`${row.positive_streak}-week positive score streak`} title={`${row.positive_streak}-week positive score streak`}>📈 {row.positive_streak}</span>
+                      : <span className="muted" aria-label="No positive score streak">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : <p className="muted">No standings yet — run a scoring cycle to begin.</p>}
         {error && <p className="error">{error}</p>}
       </section>
@@ -1068,6 +1125,55 @@ export default function HomePage() {
           ))
         }
       </section>
+
+      {/* ── Achievements & streak stats ── */}
+      {selectedCabinetId && (
+        <section className="card">
+          <h2>Achievements &amp; streaks</h2>
+          {cabinetStats && (
+            <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>
+                  {cabinetStats.participation_streak > 0 ? `🗳 ${cabinetStats.participation_streak}` : "—"}
+                </div>
+                <div className="muted" style={{ fontSize: "0.75rem" }}>Mandate streak</div>
+                <div className="muted" style={{ fontSize: "0.7rem" }}>Best: {cabinetStats.longest_participation_streak}</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>
+                  {cabinetStats.positive_streak > 0 ? `📈 ${cabinetStats.positive_streak}` : "—"}
+                </div>
+                <div className="muted" style={{ fontSize: "0.75rem" }}>Positive streak</div>
+                <div className="muted" style={{ fontSize: "0.7rem" }}>Best: {cabinetStats.longest_positive_streak}</div>
+              </div>
+            </div>
+          )}
+          {achievements.length > 0 ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+              {achievements.map((ach) => (
+                <div
+                  key={ach.id}
+                  title={`${ach.description} (Week ${ach.week})`}
+                  style={{
+                    background: "rgba(124,240,192,0.12)",
+                    border: "1px solid rgba(124,240,192,0.35)",
+                    borderRadius: "8px",
+                    padding: "0.5rem 0.75rem",
+                    fontSize: "0.85rem",
+                    cursor: "default",
+                  }}
+                >
+                  <span style={{ marginRight: "0.4rem" }}>🏅</span>
+                  <strong>{ach.name}</strong>
+                  <span className="muted" style={{ marginLeft: "0.4rem", fontSize: "0.75rem" }}>Wk {ach.week}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No achievements yet — complete scoring cycles to earn badges.</p>
+          )}
+        </section>
+      )}
 
       {/* ── Parliamentary events ── */}
       <section className="card">
