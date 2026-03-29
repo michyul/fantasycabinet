@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -74,6 +74,9 @@ class LedgerEntryModel(Base):
     team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), index=True)
     event: Mapped[str] = mapped_column(String(120))
     points: Mapped[int] = mapped_column(Integer)
+    attribution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    politician_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    story_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)  # FK to news_stories
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -91,6 +94,7 @@ class PoliticalEventModel(Base):
     payload_json: Mapped[dict] = mapped_column("payload", JSONB)
     scored: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     scored_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    story_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)  # FK to news_stories
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -126,60 +130,136 @@ class PolicySelectionModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-@dataclass
-class PoliticalAsset:
-    id: str
-    name: str
-    jurisdiction: str
-    asset_type: str
-    party: str = "independent"
+class PoliticianModel(Base):
+    """A real politician tracked by the platform. Seeded by BootstrapEngine."""
+    __tablename__ = "politicians"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)   # e.g. pol-mark-carney
+    full_name: Mapped[str] = mapped_column(String(200), index=True)
+    aliases_json: Mapped[dict] = mapped_column("aliases", JSONB, default=list)
+    current_role: Mapped[str] = mapped_column(String(300), default="")
+    role_tier: Mapped[int] = mapped_column(Integer, default=5)       # 1=PM/Premier … 5=backbench
+    party: Mapped[str] = mapped_column(String(80), default="independent")
+    jurisdiction: Mapped[str] = mapped_column(String(20), index=True)  # federal|ON|QC|BC|AB|…
+    asset_type: Mapped[str] = mapped_column(String(40), default="parliamentary")  # executive|cabinet|opposition|parliamentary
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # active|pending|ineligible|retired
+    source: Mapped[str] = mapped_column(String(40), default="bootstrap")   # ourcommons|wikidata|curated|admin
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-# MPS is the canonical name; ASSETS is kept as alias for backward compat
-MPS: list[PoliticalAsset] = [
-    # ── Federal – Government (Liberal) ──────────────────────────────────────
-    PoliticalAsset("mp-fed-pm",           "Prime Minister",               "federal", "executive",   "Liberal"),
-    PoliticalAsset("mp-fed-deputy-pm",    "Deputy Prime Minister",        "federal", "executive",   "Liberal"),
-    PoliticalAsset("mp-fed-finance",      "Federal Finance Minister",     "federal", "cabinet",     "Liberal"),
-    PoliticalAsset("mp-fed-health",       "Federal Health Minister",      "federal", "cabinet",     "Liberal"),
-    PoliticalAsset("mp-fed-justice",      "Federal Justice Minister",     "federal", "cabinet",     "Liberal"),
-    PoliticalAsset("mp-fed-environment",  "Federal Environment Minister", "federal", "cabinet",     "Liberal"),
-    PoliticalAsset("mp-fed-houseLeader",  "Government House Leader",      "federal", "parliamentary", "Liberal"),
-    # ── Federal – Opposition (Conservative) ─────────────────────────────────
-    PoliticalAsset("mp-fed-con-leader",   "Conservative Leader",          "federal", "opposition",  "Conservative"),
-    PoliticalAsset("mp-fed-con-finance",  "Conservative Finance Critic",  "federal", "opposition",  "Conservative"),
-    PoliticalAsset("mp-fed-con-house",    "Conservative House Leader",    "federal", "parliamentary", "Conservative"),
-    # ── Federal – NDP ────────────────────────────────────────────────────────
-    PoliticalAsset("mp-fed-ndp-leader",   "NDP Leader",                   "federal", "opposition",  "NDP"),
-    PoliticalAsset("mp-fed-ndp-finance",  "NDP Finance Critic",           "federal", "opposition",  "NDP"),
-    # ── Federal – Bloc Québécois ─────────────────────────────────────────────
-    PoliticalAsset("mp-fed-bloc-leader",  "Bloc Québécois Leader",        "federal", "opposition",  "Bloc"),
-    # ── Ontario (Conservative provincial) ───────────────────────────────────
-    PoliticalAsset("mp-on-premier",       "Premier of Ontario",           "ON",      "executive",   "Conservative"),
-    PoliticalAsset("mp-on-finance",       "Ontario Finance Minister",     "ON",      "cabinet",     "Conservative"),
-    PoliticalAsset("mp-on-health",        "Ontario Health Minister",      "ON",      "cabinet",     "Conservative"),
-    PoliticalAsset("mp-on-opp",           "Ontario Liberal Leader",       "ON",      "opposition",  "Liberal"),
-    # ── Québec (CAQ provincial) ──────────────────────────────────────────────
-    PoliticalAsset("mp-qc-premier",       "Premier of Québec",            "QC",      "executive",   "CAQ"),
-    PoliticalAsset("mp-qc-finance",       "Québec Finance Minister",      "QC",      "cabinet",     "CAQ"),
-    PoliticalAsset("mp-qc-opp",           "Québec PQ Leader",             "QC",      "opposition",  "PQ"),
-    # ── British Columbia (NDP provincial) ───────────────────────────────────
-    PoliticalAsset("mp-bc-premier",       "Premier of British Columbia",  "BC",      "executive",   "NDP"),
-    PoliticalAsset("mp-bc-finance",       "BC Finance Minister",          "BC",      "cabinet",     "NDP"),
-    PoliticalAsset("mp-bc-opp",           "BC Conservative Leader",       "BC",      "opposition",  "Conservative"),
-    # ── Alberta (UCP provincial) ─────────────────────────────────────────────
-    PoliticalAsset("mp-ab-premier",       "Premier of Alberta",           "AB",      "executive",   "UCP"),
-    PoliticalAsset("mp-ab-finance",       "Alberta Finance Minister",     "AB",      "cabinet",     "UCP"),
-    PoliticalAsset("mp-ab-opp",           "Alberta NDP Leader",           "AB",      "opposition",  "NDP"),
-    # ── Manitoba (NDP provincial) ────────────────────────────────────────────
-    PoliticalAsset("mp-mb-premier",       "Premier of Manitoba",          "MB",      "executive",   "NDP"),
-    # ── Nova Scotia (Conservative provincial) ───────────────────────────────
-    PoliticalAsset("mp-ns-premier",       "Premier of Nova Scotia",       "NS",      "executive",   "Conservative"),
-    # ── Saskatchewan (Conservative provincial) ──────────────────────────────
-    PoliticalAsset("mp-sk-premier",       "Premier of Saskatchewan",      "SK",      "executive",   "Conservative"),
-]
-ASSETS = MPS  # backward-compat alias
+class PoliticianRoleHistoryModel(Base):
+    """Tracks every role change for a politician (for scoring leadership_change events)."""
+    __tablename__ = "politician_role_history"
 
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    politician_id: Mapped[str] = mapped_column(String(80), ForeignKey("politicians.id"), index=True)
+    previous_role: Mapped[str] = mapped_column(String(300), default="")
+    new_role: Mapped[str] = mapped_column(String(300), default="")
+    previous_tier: Mapped[int] = mapped_column(Integer, default=5)
+    new_tier: Mapped[int] = mapped_column(Integer, default=5)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    changed_by_user_id: Mapped[str] = mapped_column(String(36), default="system")
+
+
+class EventAttributionModel(Base):
+    """Records which politician was attributed to a political event."""
+    __tablename__ = "event_attributions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(40), ForeignKey("political_events.id"), index=True)
+    politician_id: Mapped[str] = mapped_column(String(80), ForeignKey("politicians.id"), index=True)
+    attribution_type: Mapped[str] = mapped_column(String(20))  # direct_name|alias|role_title|system
+    confidence: Mapped[float] = mapped_column(Float)
+    matched_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DataSourceModel(Base):
+    """Feed or API source used by the worker and the bootstrap engine."""
+    __tablename__ = "data_sources"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    source_type: Mapped[str] = mapped_column(String(30), index=True)  # rss|ourcommons_api|wikidata_sparql|legislature_html
+    bootstrap: Mapped[bool] = mapped_column(Boolean, default=False)   # True = used by BootstrapEngine
+    url_template: Mapped[str] = mapped_column(Text)
+    config_json: Mapped[dict] = mapped_column("config", JSONB, default=dict)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    politician_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)  # per-politician RSS
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScoringRuleModel(Base):
+    """DB-managed scoring rules consumed by ScoringEngine."""
+    __tablename__ = "scoring_rules"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    rule_version: Mapped[str] = mapped_column(String(20), default="v1", index=True)
+    event_type: Mapped[str] = mapped_column(String(40))
+    asset_type: Mapped[str] = mapped_column(String(40))
+    base_points: Mapped[int] = mapped_column(Integer)
+    affinity_bonus: Mapped[int] = mapped_column(Integer, default=0)
+    jurisdiction_scope: Mapped[str] = mapped_column(String(10), default="own")  # own|any
+    description: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class SystemConfigModel(Base):
+    """Runtime configuration key/value store (AI settings, scoring params, etc.)."""
+    __tablename__ = "system_config"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value_json: Mapped[dict] = mapped_column("value", JSONB)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(36), default="system")
+
+
+class RoleClassificationModel(Base):
+    """Pattern → (tier, asset_type) rules used by BootstrapEngine's RoleClassifier."""
+    __tablename__ = "role_classifications"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    pattern: Mapped[str] = mapped_column(String(120), index=True)  # lowercase substring to match
+    tier: Mapped[int] = mapped_column(Integer)
+    asset_type: Mapped[str] = mapped_column(String(40))
+    jurisdiction_hint: Mapped[str | None] = mapped_column(String(20), nullable=True)  # federal|provincial|None
+    priority: Mapped[int] = mapped_column(Integer, default=0, index=True)   # higher = checked first
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class NewsStoryModel(Base):
+    """
+    A canonical news story derived from clustering multiple raw PoliticalEventModel
+    articles. This is the unit of scoring — not individual articles.
+
+    Lifecycle: active → settling → archived
+    Scoring:   scored=False → scored=True (+ corrections via rescore_pending)
+    """
+    __tablename__ = "news_stories"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)   # story-{sha1[:16]}
+    canonical_title: Mapped[str] = mapped_column(Text, index=True)
+    canonical_summary: Mapped[str] = mapped_column(Text, default="")
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    jurisdiction: Mapped[str] = mapped_column(String(20), index=True)
+    significance: Mapped[float] = mapped_column(Float)              # 1–10, AI or heuristic
+    sentiment: Mapped[float] = mapped_column(Float, default=0.0)    # −1 to +1
+    is_followup: Mapped[bool] = mapped_column(Boolean, default=False)  # follow-up coverage → 50% points
+    article_count: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)  # active|settling|archived
+    scored: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    scored_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_scored_significance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_version: Mapped[int] = mapped_column(Integer, default=0)  # incremented on each rescore
+    rescore_count: Mapped[int] = mapped_column(Integer, default=0)  # max 3
+    rescore_pending: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ── Hardcoded game-structure constants (not politician data) ──────────────────
+# These define the SHAPE of a cabinet, not who is in it.
 # Human-readable display names for portfolio seat keys
 PORTFOLIO_SEAT_LABELS: dict[str, str] = {
     "head_of_government":   "Head of Government",
@@ -243,11 +323,37 @@ class PersistentStore:
     def init_db(self) -> None:
         Base.metadata.create_all(self.engine)
         with self.engine.begin() as connection:
+            # Legacy column migrations
             connection.exec_driver_sql(
                 "ALTER TABLE roster_slots ADD COLUMN IF NOT EXISTS lineup_status VARCHAR(10) DEFAULT 'active'"
             )
             connection.exec_driver_sql(
                 "UPDATE roster_slots SET lineup_status='active' WHERE lineup_status IS NULL"
+            )
+            # New ledger columns for attribution linkage
+            connection.exec_driver_sql(
+                "ALTER TABLE score_ledger_entries ADD COLUMN IF NOT EXISTS attribution_id VARCHAR(40)"
+            )
+            connection.exec_driver_sql(
+                "ALTER TABLE score_ledger_entries ADD COLUMN IF NOT EXISTS politician_id VARCHAR(80)"
+            )
+            # story_id for full pipeline traceability
+            connection.exec_driver_sql(
+                "ALTER TABLE score_ledger_entries ADD COLUMN IF NOT EXISTS story_id VARCHAR(40)"
+            )
+            connection.exec_driver_sql(
+                "ALTER TABLE political_events ADD COLUMN IF NOT EXISTS story_id VARCHAR(40)"
+            )
+            # Seed max_story_points if not present
+            connection.exec_driver_sql(
+                "INSERT INTO system_config (key, value, updated_at, updated_by) "
+                "VALUES ('max_story_points', '15', NOW(), 'system') "
+                "ON CONFLICT (key) DO NOTHING"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO system_config (key, value, updated_at, updated_by) "
+                "VALUES ('story_rescore_threshold', '1.5', NOW(), 'system') "
+                "ON CONFLICT (key) DO NOTHING"
             )
             # Rename legacy scope names
             connection.exec_driver_sql(
@@ -265,22 +371,18 @@ class PersistentStore:
                     ELSE slot
                 END
             """)
-            # Migrate old asset IDs to canonical MP IDs
-            connection.exec_driver_sql("""
-                UPDATE roster_slots SET asset_id = CASE asset_id
-                    WHEN 'asset-federal-pm'         THEN 'mp-fed-pm'
-                    WHEN 'asset-federal-finance'    THEN 'mp-fed-finance'
-                    WHEN 'asset-federal-health'     THEN 'mp-fed-health'
-                    WHEN 'asset-federal-justice'    THEN 'mp-fed-justice'
-                    WHEN 'asset-federal-opposition' THEN 'mp-fed-con-leader'
-                    WHEN 'asset-on-premier'         THEN 'mp-on-premier'
-                    WHEN 'asset-qc-premier'         THEN 'mp-qc-premier'
-                    WHEN 'asset-bc-premier'         THEN 'mp-bc-premier'
-                    WHEN 'asset-ab-premier'         THEN 'mp-ab-premier'
-                    WHEN 'asset-mb-premier'         THEN 'mp-mb-premier'
-                    ELSE asset_id
-                END
-            """)
+        # Run bootstrap engine (idempotent — seeds config tables and fetches politicians if DB empty)
+        try:
+            from app.api.v1.bootstrap_engine import BootstrapEngine
+            with Session(self.engine) as session:
+                count = BootstrapEngine().run(session)
+                session.commit()
+                if count:
+                    import logging
+                    logging.getLogger(__name__).info("BootstrapEngine seeded %d politicians", count)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning("BootstrapEngine skipped during init_db: %s", exc)
         self._normalize_existing_lineups()
 
     def _normalize_existing_lineups(self) -> None:
@@ -472,19 +574,18 @@ class PersistentStore:
             if active_count != ACTIVE_LINEUP_SIZE:
                 raise ValueError(f"Mandate configuration must have exactly {ACTIVE_LINEUP_SIZE} governing slots")
 
-            federal_active = 0
-            provincial_active = 0
-            asset_by_id = {asset.id: asset for asset in ASSETS}
-            for slot in slots:
-                if slot.lineup_status != "active":
-                    continue
-                asset = asset_by_id.get(slot.asset_id)
-                if asset is None:
-                    continue
-                if asset.jurisdiction.lower() == "federal":
-                    federal_active += 1
-                else:
-                    provincial_active += 1
+            # Jurisdiction validation — query politicians from DB
+            active_asset_ids = [slot.asset_id for slot in slots if slot.lineup_status == "active"]
+            politicians = {
+                p.id: p for p in session.scalars(
+                    select(PoliticianModel).where(PoliticianModel.id.in_(active_asset_ids))
+                )
+            }
+            federal_active = sum(
+                1 for aid in active_asset_ids
+                if politicians.get(aid) and politicians[aid].jurisdiction.lower() == "federal"
+            )
+            provincial_active = active_count - federal_active
 
             if federal_active < MIN_FEDERAL_ACTIVE:
                 raise ValueError("Mandate configuration must include at least one federal governing slot")
@@ -494,9 +595,10 @@ class PersistentStore:
             session.commit()
             return active_count, len(slots) - active_count
 
-    def ingest_events(self, events: list[PoliticalEventIn]) -> tuple[int, int, int]:
+    def ingest_events(self, events: list[PoliticalEventIn]) -> tuple[int, int, int, list[str]]:
         inserted = 0
         duplicates = 0
+        inserted_ids: list[str] = []
         with Session(self.engine) as session:
             for event in events:
                 normalized_source_event_id = self._normalize_source_event_id(event.source_event_id)
@@ -510,9 +612,10 @@ class PersistentStore:
                     duplicates += 1
                     continue
 
+                new_id = f"event-{uuid4().hex[:12]}"
                 session.add(
                     PoliticalEventModel(
-                        id=f"event-{uuid4().hex[:12]}",
+                        id=new_id,
                         source_name=event.source_name,
                         source_event_id=normalized_source_event_id,
                         title=event.title,
@@ -527,9 +630,10 @@ class PersistentStore:
                     )
                 )
                 inserted += 1
+                inserted_ids.append(new_id)
 
             session.commit()
-        return len(events), inserted, duplicates
+        return len(events), inserted, duplicates, inserted_ids
 
     @staticmethod
     def _normalize_source_event_id(source_event_id: str) -> str:
@@ -544,6 +648,19 @@ class PersistentStore:
             return list(session.scalars(stmt))
 
     def score_league_week(self, league_id: str) -> tuple[int, int]:
+        """
+        Score all unscored stories (and correction re-scores) for the given league.
+
+        Pipeline:
+          1. Score new stories (scored=False) via ScoringEngine.score_teams_for_stories()
+          2. Emit correction entries for stories with rescore_pending=True
+          3. Fall back to deterministic momentum when no stories exist
+
+        Returns (scored_week, ledger_entries_created).
+        """
+        from app.api.v1.ai_client import AIClient
+        from app.api.v1.scoring_engine import ScoringEngine
+
         with Session(self.engine) as session:
             league = session.get(LeagueModel, league_id)
             if league is None:
@@ -551,78 +668,198 @@ class PersistentStore:
 
             teams = list(session.scalars(select(TeamModel).where(TeamModel.league_id == league_id)))
             created = 0
-            unscored_events = list(
+
+            # Load policy objectives per team
+            policy_objectives_by_team: dict[str, list] = {}
+            for team in teams:
+                sel_rows = list(session.scalars(
+                    select(PolicySelectionModel).where(PolicySelectionModel.team_id == team.id)
+                ))
+                selected_ids = {r.objective_id for r in sel_rows}
+                policy_objectives_by_team[team.id] = [
+                    obj for obj in POLICY_OBJECTIVES if obj.id in selected_ids
+                ]
+
+            config = self.get_system_config()
+            ai_client = AIClient.from_config(config) if config.get("ai_enabled") else None
+            story_cap = int(config.get("max_story_points", 15))
+            week = league.current_week
+
+            scoring_engine = ScoringEngine(
+                session=session,
+                ai_client=ai_client,
+                max_points_per_asset=int(config.get("max_points_per_asset_week", 25)),
+                min_points_per_asset=int(config.get("min_points_per_asset_week", -20)),
+                ai_confidence_weight=float(config.get("ai_confidence_weight", 0.3)),
+            )
+
+            # ── 1. Score new unscored stories ──────────────────────────────────
+            unscored_stories = list(
                 session.scalars(
-                    select(PoliticalEventModel)
-                    .where(PoliticalEventModel.scored.is_(False))
-                    .order_by(PoliticalEventModel.occurred_at.asc())
+                    select(NewsStoryModel)
+                    .where(
+                        NewsStoryModel.scored.is_(False),
+                        NewsStoryModel.status.in_(["active", "settling"]),
+                    )
+                    .order_by(NewsStoryModel.first_seen_at.asc())
                 )
             )
 
-            for team in teams:
-                slots = list(session.scalars(select(RosterSlotModel).where(RosterSlotModel.team_id == team.id)))
-                active_slots = [slot for slot in slots if slot.lineup_status == "active"]
-                # Load this cabinet's active policy objectives for bonus scoring
-                policy_sel_rows = list(session.scalars(
-                    select(PolicySelectionModel).where(PolicySelectionModel.team_id == team.id)
-                ))
-                active_objectives = [
-                    obj for obj in POLICY_OBJECTIVES
-                    if obj.id in {r.objective_id for r in policy_sel_rows}
-                ]
-                for event in unscored_events:
-                    best_points = 0
-                    best_slot = None
-                    for slot in active_slots:
-                        points = self._score_event_for_asset(slot.asset_id, event)
-                        if abs(points) > abs(best_points):
-                            best_points = points
-                            best_slot = slot
-
-                    if best_slot is None or best_points == 0:
-                        continue
-
-                    # Policy objective bonus: take the highest matching bonus
-                    policy_bonus = max(
-                        (obj.bonus for obj in active_objectives if event.event_type in obj.event_types),
-                        default=0,
-                    )
-
+            if unscored_stories:
+                results = scoring_engine.score_teams_for_stories(
+                    league_id=league_id,
+                    week=week,
+                    teams=teams,
+                    stories=unscored_stories,
+                    policy_objectives_by_team=policy_objectives_by_team,
+                    story_max_points=story_cap,
+                )
+                for result in results:
                     session.add(
                         LedgerEntryModel(
-                            id=f"ledger-{uuid4().hex[:12]}",
-                            week=league.current_week,
+                            id=result.ledger_id,
+                            week=week,
                             league_id=league_id,
-                            team_id=team.id,
-                            event=f"real_event.{event.event_type}.{best_slot.slot}",
-                            points=best_points + policy_bonus,
+                            team_id=result.team_id,
+                            event=f"story.{result.event_type}.{result.slot_name}",
+                            points=result.final_points,
+                            attribution_id=result.attribution_id,
+                            politician_id=result.politician_id,
+                            story_id=result.story_id,
                             created_at=utcnow(),
                         )
                     )
                     created += 1
 
-            for event in unscored_events:
-                event.scored = True
-                event.scored_week = league.current_week
+                # Mark all scored
+                for story in unscored_stories:
+                    story.scored = True
+                    story.scored_week = week
+                    story.last_scored_significance = story.significance
+                    story.rescore_pending = False
 
-            if not unscored_events:
-                for team in teams:
-                    slots = list(session.scalars(select(RosterSlotModel).where(RosterSlotModel.team_id == team.id)))
-                    active_slots = [slot for slot in slots if slot.lineup_status == "active"]
-                    for slot in active_slots:
-                        points = self._score_slot(slot.asset_id, league.current_week)
+            # ── 2. Emit corrections for re-scored stories ─────────────────────
+            rescore_stories = list(
+                session.scalars(
+                    select(NewsStoryModel)
+                    .where(
+                        NewsStoryModel.scored.is_(True),
+                        NewsStoryModel.rescore_pending.is_(True),
+                        NewsStoryModel.rescore_count < 3,
+                    )
+                )
+            )
+
+            for story in rescore_stories:
+                corrections = scoring_engine.rescore_story_corrections(
+                    league_id=league_id,
+                    week=week,
+                    teams=teams,
+                    story=story,
+                    policy_objectives_by_team=policy_objectives_by_team,
+                    story_max_points=story_cap,
+                )
+                for corr in corrections:
+                    session.add(
+                        LedgerEntryModel(
+                            id=corr.ledger_id,
+                            week=week,
+                            league_id=league_id,
+                            team_id=corr.team_id,
+                            event=f"story.correction.{story.event_type}",
+                            points=corr.final_points,
+                            attribution_id=corr.attribution_id,
+                            politician_id=corr.politician_id,
+                            story_id=story.id,
+                            created_at=utcnow(),
+                        )
+                    )
+                    created += 1
+
+                story.rescore_count += 1
+                story.score_version += 1
+                story.last_scored_significance = story.significance
+                story.rescore_pending = False
+
+            # ── 3. Also handle ineligibility penalties ────────────────────────
+            penalties = scoring_engine.score_ineligibility_penalties(
+                league_id=league_id,
+                week=week,
+                teams=teams,
+            )
+            for pen in penalties:
+                session.add(
+                    LedgerEntryModel(
+                        id=pen.ledger_id,
+                        week=week,
+                        league_id=league_id,
+                        team_id=pen.team_id,
+                        event=f"penalty.ineligibility.{pen.slot_name}",
+                        points=pen.final_points,
+                        politician_id=pen.politician_id,
+                        created_at=utcnow(),
+                    )
+                )
+                created += 1
+
+            # ── 4. Fallback: deterministic momentum when no stories exist ─────
+            if not unscored_stories and not rescore_stories:
+                # Also check for any legacy unscored raw events (backward compat)
+                legacy_events = list(
+                    session.scalars(
+                        select(PoliticalEventModel)
+                        .where(PoliticalEventModel.scored.is_(False))
+                        .order_by(PoliticalEventModel.occurred_at.asc())
+                    )
+                )
+                if legacy_events:
+                    legacy_results = scoring_engine.score_teams_for_events(
+                        league_id=league_id,
+                        week=week,
+                        teams=teams,
+                        events=legacy_events,
+                        policy_objectives_by_team=policy_objectives_by_team,
+                    )
+                    for result in legacy_results:
                         session.add(
                             LedgerEntryModel(
-                                id=f"ledger-{uuid4().hex[:12]}",
-                                week=league.current_week,
+                                id=result.ledger_id,
+                                week=week,
                                 league_id=league_id,
-                                team_id=team.id,
-                                event=f"weekly.momentum.{slot.slot}",
-                                points=points,
+                                team_id=result.team_id,
+                                event=f"real_event.{result.event_type}.{result.slot_name}",
+                                points=result.final_points,
+                                attribution_id=result.attribution_id,
+                                politician_id=result.politician_id,
                                 created_at=utcnow(),
                             )
                         )
                         created += 1
+                    for event in legacy_events:
+                        event.scored = True
+                        event.scored_week = week
+                else:
+                    # Pure momentum fallback when no events at all
+                    for team in teams:
+                        slots = list(session.scalars(
+                            select(RosterSlotModel).where(
+                                RosterSlotModel.team_id == team.id,
+                                RosterSlotModel.lineup_status == "active",
+                            )
+                        ))
+                        for slot in slots:
+                            session.add(
+                                LedgerEntryModel(
+                                    id=f"ledger-{uuid4().hex[:12]}",
+                                    week=week,
+                                    league_id=league_id,
+                                    team_id=team.id,
+                                    event=f"weekly.momentum.{slot.slot}",
+                                    points=self._score_slot(slot.asset_id, week),
+                                    created_at=utcnow(),
+                                )
+                            )
+                            created += 1
 
             self._add_audit(
                 session,
@@ -630,9 +867,10 @@ class PersistentStore:
                 "system",
                 "scoring.week.completed",
                 {
-                    "week": league.current_week,
+                    "week": week,
                     "entriesCreated": created,
-                    "realEventsProcessed": len(unscored_events),
+                    "storiesScored": len(unscored_stories),
+                    "correctionsEmitted": len(rescore_stories),
                 },
             )
             scored_week = league.current_week
@@ -702,26 +940,37 @@ class PersistentStore:
             return list(session.scalars(stmt))
 
     def _assign_initial_roster(self, session: Session, league_id: str, team_id: str) -> None:
+        """Assign politicians from the DB to a new cabinet's roster slots."""
         used_asset_rows = session.execute(
             select(RosterSlotModel.asset_id)
             .join(TeamModel, TeamModel.id == RosterSlotModel.team_id)
             .where(TeamModel.league_id == league_id)
         ).all()
         used_asset_ids = {row[0] for row in used_asset_rows}
-        available = [asset for asset in ASSETS if asset.id not in used_asset_ids]
+
+        # Prefer active politicians; fall back to all if pool is too small.
+        active_pols = list(session.scalars(
+            select(PoliticianModel)
+            .where(PoliticianModel.status == "active")
+            .order_by(PoliticianModel.role_tier.asc(), PoliticianModel.full_name.asc())
+        ))
+        available = [p for p in active_pols if p.id not in used_asset_ids]
         if len(available) < len(ROSTER_SLOTS):
-            available = ASSETS
+            available = active_pols if active_pols else []
 
         for idx, slot_name in enumerate(ROSTER_SLOTS):
-            asset = available[idx % len(available)]
+            pol = available[idx % len(available)] if available else None
+            asset_id = pol.id if pol else f"placeholder-{idx}"
             default_status = "active" if idx < 4 else "bench"
-            session.add(RosterSlotModel(team_id=team_id, slot=slot_name, asset_id=asset.id, lineup_status=default_status))
+            session.add(RosterSlotModel(team_id=team_id, slot=slot_name, asset_id=asset_id, lineup_status=default_status))
 
     def assign_mp_to_seat(self, team_id: str, slot_name: str, mp_id: str) -> RosterSlotModel:
-        mp = next((a for a in ASSETS if a.id == mp_id), None)
-        if mp is None:
-            raise ValueError(f"MP {mp_id!r} not found in pool")
         with Session(self.engine) as session:
+            pol = session.get(PoliticianModel, mp_id)
+            if pol is None:
+                raise ValueError(f"Politician {mp_id!r} not found")
+            if pol.status not in {"active", "pending"}:
+                raise ValueError(f"Politician {pol.full_name!r} has status {pol.status!r} and cannot be assigned")
             team = session.get(TeamModel, team_id)
             if team is None:
                 raise ValueError("Cabinet not found")
@@ -767,81 +1016,224 @@ class PersistentStore:
             session.commit()
         return filtered
 
+    # ── Politician queries ─────────────────────────────────────────────────────
+
+    def create_politician(
+        self,
+        full_name: str,
+        current_role: str = "",
+        role_tier: int = 5,
+        party: str = "independent",
+        jurisdiction: str = "federal",
+        asset_type: str = "parliamentary",
+        status: str = "active",
+        aliases: list[str] | None = None,
+        source: str = "admin",
+    ) -> PoliticianModel:
+        """Manually create a politician (admin use when bootstrap sources unavailable)."""
+        import re as _re  # noqa: PLC0415
+        slug = _re.sub(r"[^a-z0-9]+", "-", full_name.lower()).strip("-")
+        pol_id = f"pol-{slug[:50]}"
+        with Session(self.engine) as session:
+            existing = session.get(PoliticianModel, pol_id)
+            if existing is not None:
+                return existing
+            pol = PoliticianModel(
+                id=pol_id,
+                full_name=full_name,
+                aliases_json=aliases or [],
+                current_role=current_role,
+                role_tier=role_tier,
+                party=party,
+                jurisdiction=jurisdiction,
+                asset_type=asset_type,
+                status=status,
+                source=source,
+                last_verified_at=utcnow(),
+                created_at=utcnow(),
+            )
+            session.add(pol)
+            session.commit()
+            session.refresh(pol)
+            return pol
+
+    def list_politicians(self, status: str | None = None) -> list[PoliticianModel]:
+        with Session(self.engine) as session:
+            stmt = select(PoliticianModel).order_by(PoliticianModel.role_tier.asc(), PoliticianModel.full_name.asc())
+            if status:
+                stmt = stmt.where(PoliticianModel.status == status)
+            return list(session.scalars(stmt))
+
+    def get_politician(self, politician_id: str) -> PoliticianModel | None:
+        with Session(self.engine) as session:
+            return session.get(PoliticianModel, politician_id)
+
+    def update_politician_role(
+        self,
+        politician_id: str,
+        new_role: str,
+        new_tier: int,
+        changed_by_user_id: str,
+        new_status: str | None = None,
+    ) -> PoliticianModel | None:
+        with Session(self.engine) as session:
+            pol = session.get(PoliticianModel, politician_id)
+            if pol is None:
+                return None
+            history = PoliticianRoleHistoryModel(
+                id=f"rh-{uuid4().hex[:12]}",
+                politician_id=pol.id,
+                previous_role=pol.current_role,
+                new_role=new_role,
+                previous_tier=pol.role_tier,
+                new_tier=new_tier,
+                changed_at=utcnow(),
+                changed_by_user_id=changed_by_user_id,
+            )
+            session.add(history)
+            pol.current_role = new_role
+            pol.role_tier = new_tier
+            if new_status:
+                pol.status = new_status
+            pol.last_verified_at = utcnow()
+            session.commit()
+            session.refresh(pol)
+            return pol
+
+    def list_role_history(self, politician_id: str) -> list[PoliticianRoleHistoryModel]:
+        with Session(self.engine) as session:
+            stmt = (
+                select(PoliticianRoleHistoryModel)
+                .where(PoliticianRoleHistoryModel.politician_id == politician_id)
+                .order_by(PoliticianRoleHistoryModel.changed_at.desc())
+            )
+            return list(session.scalars(stmt))
+
+    # ── System config ──────────────────────────────────────────────────────────
+
+    def get_system_config(self) -> dict:
+        with Session(self.engine) as session:
+            rows = list(session.scalars(select(SystemConfigModel)))
+            return {row.key: row.value_json for row in rows}
+
+    def update_system_config(self, key: str, value: object, updated_by: str = "system") -> None:
+        with Session(self.engine) as session:
+            row = session.get(SystemConfigModel, key)
+            if row is None:
+                session.add(SystemConfigModel(key=key, value_json=value, updated_by=updated_by, updated_at=utcnow()))
+            else:
+                row.value_json = value
+                row.updated_by = updated_by
+                row.updated_at = utcnow()
+            session.commit()
+
+    # ── Data sources ───────────────────────────────────────────────────────────
+
+    def list_data_sources(self, bootstrap: bool | None = None, active: bool | None = None) -> list[DataSourceModel]:
+        with Session(self.engine) as session:
+            stmt = select(DataSourceModel).order_by(DataSourceModel.name.asc())
+            if bootstrap is not None:
+                stmt = stmt.where(DataSourceModel.bootstrap == bootstrap)
+            if active is not None:
+                stmt = stmt.where(DataSourceModel.active == active)
+            return list(session.scalars(stmt))
+
+    # ── Attribution ────────────────────────────────────────────────────────────
+
+    def run_attribution(self, event_ids: list[str]) -> dict:
+        """Load AI config, run AttributionEngine, return summary counts."""
+        from app.api.v1.ai_client import AIClient
+        from app.api.v1.attribution import AttributionEngine
+        config = self.get_system_config()
+        ai_client = AIClient.from_config(config) if config.get("ai_enabled") else None
+        floor = float(config.get("attribution_confidence_floor", 0.65))
+        with Session(self.engine) as session:
+            engine = AttributionEngine(session, ai_client=ai_client, confidence_floor=floor)
+            written = engine.run(event_ids)
+            session.commit()
+        return {"event_ids_processed": len(event_ids), "attributions_written": written}
+
+    # ── Story clustering ────────────────────────────────────────────────────────
+
+    def run_story_clustering(self, window_hours: int = 24) -> dict:
+        """
+        Run StoryClusteringEngine for unclustered articles within window_hours.
+        Returns summary dict for API response.
+        """
+        from app.api.v1.ai_client import AIClient
+        from app.api.v1.news_analysis_client import NewsAnalysisClient
+        from app.api.v1.story_engine import StoryClusteringEngine
+        config = self.get_system_config()
+        ai_client = AIClient.from_config(config) if config.get("ai_enabled") else None
+        news_client = NewsAnalysisClient(ai_client=ai_client)
+        with Session(self.engine) as session:
+            engine = StoryClusteringEngine(session=session, news_client=news_client)
+            result = engine.process_unclustered_articles(window_hours=window_hours)
+            _ = engine.check_stories_for_lifecycle_updates()
+            session.commit()
+        return {
+            "stories_created": result.stories_created,
+            "stories_updated": result.stories_updated,
+            "articles_assigned": result.articles_assigned,
+            "rescore_triggers": result.rescore_triggers,
+        }
+
+    def list_stories(
+        self,
+        status: str | None = None,
+        scored: bool | None = None,
+        rescore_pending: bool | None = None,
+        limit: int = 100,
+    ) -> list[NewsStoryModel]:
+        with Session(self.engine) as session:
+            stmt = (
+                select(NewsStoryModel)
+                .order_by(NewsStoryModel.first_seen_at.desc())
+                .limit(limit)
+            )
+            if status is not None:
+                stmt = stmt.where(NewsStoryModel.status == status)
+            if scored is not None:
+                stmt = stmt.where(NewsStoryModel.scored == scored)
+            if rescore_pending is not None:
+                stmt = stmt.where(NewsStoryModel.rescore_pending == rescore_pending)
+            return list(session.scalars(stmt))
+
+    def get_story(self, story_id: str) -> NewsStoryModel | None:
+        with Session(self.engine) as session:
+            return session.get(NewsStoryModel, story_id)
+
+    def get_unscored_stories(self, week: int | None = None) -> list[NewsStoryModel]:
+        """Return stories ready for initial scoring (have attributions, not yet scored)."""
+        with Session(self.engine) as session:
+            stmt = (
+                select(NewsStoryModel)
+                .where(
+                    NewsStoryModel.scored.is_(False),
+                    NewsStoryModel.status.in_(["active", "settling"]),
+                )
+                .order_by(NewsStoryModel.first_seen_at.asc())
+            )
+            return list(session.scalars(stmt))
+
+    def mark_story_scored(self, story_id: str, week: int) -> None:
+        with Session(self.engine) as session:
+            story = session.get(NewsStoryModel, story_id)
+            if story:
+                story.scored = True
+                story.scored_week = week
+                story.last_scored_significance = story.significance
+                story.rescore_pending = False
+                session.commit()
+
+    # ── Scoring ────────────────────────────────────────────────────────────────
+
     @staticmethod
     def _score_slot(asset_id: str, week: int) -> int:
+        """Deterministic fallback weekly momentum score when no real events exist."""
         token = f"{asset_id}:{week}"
         stable = sum(ord(ch) for ch in token)
         return (stable % 9) - 2
-
-    @staticmethod
-    def _score_event_for_asset(asset_id: str, event: PoliticalEventModel) -> int:
-        asset = next((a for a in MPS if a.id == asset_id), None)
-        if asset is None:
-            return 0
-
-        event_jurisdiction = (event.jurisdiction or "federal").upper()
-        asset_jurisdiction = (asset.jurisdiction or "federal").upper()
-
-        # Jurisdiction gate: provincial MPs only score provincial events in their province;
-        # federal MPs score federal events and intergovernmental events.
-        if asset_jurisdiction not in {"FEDERAL"} and asset_jurisdiction != event_jurisdiction:
-            # Allow intergovernmental events to score for all jurisdictions
-            if event.event_type != "intergovernmental":
-                return 0
-        if asset_jurisdiction == "FEDERAL" and event_jurisdiction not in {"FEDERAL", "CANADA"}:
-            if event.event_type != "intergovernmental":
-                return 0
-
-        # Base points by event category (aligned with scoring-model.md)
-        base_by_type: dict[str, int] = {
-            "legislative":       5,
-            "executive":         4,
-            "intergovernmental": 5,
-            "opposition":        3,
-            "election":          4,
-            "ethics":           -6,
-            "confidence":        6,   # confidence votes are high-stakes
-            "policy":            4,
-            "general":           2,
-        }
-        base = base_by_type.get(event.event_type, 2)
-
-        # Role affinity bonus: does this MP's role align with the event category?
-        affinity = 0
-        if asset.asset_type in {"executive"} and event.event_type in {"executive", "intergovernmental", "confidence", "policy"}:
-            affinity = 3
-        elif asset.asset_type == "cabinet" and event.event_type in {"legislative", "policy", "executive"}:
-            affinity = 2
-        elif asset.asset_type == "opposition" and event.event_type in {"opposition", "legislative", "ethics", "confidence"}:
-            affinity = 2
-        elif asset.asset_type == "parliamentary" and event.event_type in {"legislative", "confidence"}:
-            affinity = 2
-        elif event.event_type == "general":
-            affinity = 1
-
-        # Party affinity: if the event title mentions the MP's party, bonus
-        title_lower = (event.title or "").lower()
-        party_lower = asset.party.lower()
-        party_bonus = 0
-        if party_lower in title_lower and party_lower not in {"independent"}:
-            party_bonus = 2
-
-        # Negative event penalties
-        penalty = 0
-        if any(token in title_lower for token in ["resign", "scandal", "ethics violation", "investigation", "fired", "ousted"]):
-            penalty = 3
-        if event.event_type == "ethics":
-            penalty = max(penalty, 2)
-
-        # Confidence defeat is very bad for governing MPs
-        if event.event_type == "confidence" and "defeat" in title_lower:
-            if asset.asset_type in {"executive", "cabinet", "parliamentary"} and asset.jurisdiction == "federal":
-                base = -8
-
-        score = base + affinity + party_bonus - penalty
-
-        # Cap per scoring-model.md
-        return max(-8, min(8, score))
 
     @staticmethod
     def _add_audit(session: Session, league_id: str, actor_user_id: str, action: str, metadata: dict) -> None:

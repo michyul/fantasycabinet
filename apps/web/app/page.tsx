@@ -40,13 +40,20 @@ type UserProfile = {
   issuer?: string | null;
 };
 
-/** An MP in the pool that can fill a portfolio seat. */
+/** A real politician who can fill a portfolio seat. */
 type MP = {
   id: string;
-  name: string;
+  name: string;        // display name (= full_name)
+  full_name: string;
+  current_role: string;
+  role_tier: number;
   jurisdiction: string;
   asset_type: string;
   party: string;
+  status: "active" | "pending" | "ineligible" | "retired";
+  aliases: string[];
+  source: string;
+  last_verified_at?: string | null;
 };
 
 /** One MP assigned to one portfolio seat in a cabinet. */
@@ -75,6 +82,8 @@ type LedgerEntry = {
   week: number;
   event: string;
   points: number;
+  attribution_id?: string | null;
+  politician_id?: string | null;
   created_at: string;
 };
 
@@ -215,7 +224,7 @@ export default function HomePage() {
 
   async function loadMPs() {
     try {
-      const b = await readJson<{ items: MP[] }>(`${apiBase}/api/v1/mps`);
+      const b = await readJson<{ items: MP[] }>(`${apiBase}/api/v1/politicians`);
       setAllMPs(b.items);
     } catch { /* non-fatal */ }
   }
@@ -464,9 +473,16 @@ export default function HomePage() {
 
   // ── render ────────────────────────────────────────────────────────────────
 
+  const isCommissioner = profile?.roles.includes("commissioner") || profile?.roles.includes("admin");
+
   return (
     <main>
-      <h1>FantasyCabinet</h1>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+        <h1 style={{ margin: 0 }}>FantasyCabinet</h1>
+        {isCommissioner && (
+          <a href="/admin" style={{ fontSize: "0.875rem", opacity: 0.85 }}>⚙ Admin centre</a>
+        )}
+      </div>
       <p>Build a cabinet of Canadian MPs, set your governing mandate, and score from real parliamentary events.</p>
 
       {/* ── Replay onboarding ── */}
@@ -745,15 +761,31 @@ export default function HomePage() {
             <table>
               <thead><tr><th>Week</th><th>Event</th><th>Points</th></tr></thead>
               <tbody>
-                {ledger.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{entry.week}</td>
-                    <td>{entry.event}</td>
-                    <td style={{ color: entry.points < 0 ? "#ff9a9a" : "#7cf0c0", fontWeight: 600 }}>
-                      {entry.points > 0 ? `+${entry.points}` : entry.points}
-                    </td>
-                  </tr>
-                ))}
+                {ledger.map((entry) => {
+                  const isLeadershipChange = entry.event.includes("leadership_change");
+                  const isAttribLinked = !!entry.attribution_id;
+                  return (
+                    <tr key={entry.id}>
+                      <td>{entry.week}</td>
+                      <td>
+                        {entry.event}
+                        {isLeadershipChange && (
+                          <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", background: "#f39c12", color: "#000", borderRadius: "3px", padding: "1px 5px" }}>
+                            ⚡ Leadership Change
+                          </span>
+                        )}
+                        {isAttribLinked && (
+                          <span style={{ marginLeft: "0.4rem", fontSize: "0.7rem", color: "#7cf0c0" }} title={`Attribution: ${entry.attribution_id}`}>
+                            ✓
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ color: entry.points < 0 ? "#ff9a9a" : "#7cf0c0", fontWeight: 600 }}>
+                        {entry.points > 0 ? `+${entry.points}` : entry.points}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )
@@ -808,39 +840,50 @@ function MPPicker({
     <div style={{ marginTop: "1rem" }}>
       <table>
         <thead>
-          <tr><th>Seat</th><th>MP</th><th>Party</th><th>Jurisdiction</th><th></th></tr>
+          <tr><th>Seat</th><th>Politician</th><th>Role</th><th>Party</th><th>Jurisdiction</th><th></th></tr>
         </thead>
         <tbody>
           {portfolio.map((seat) => {
             const editing = editingSeatSlot === seat.slot;
             const hint    = jurisdictionHintForSlot(seat.slot);
-            const options = hint ? allMPs.filter((m) => m.jurisdiction.toLowerCase() === hint) : allMPs;
+            // Filter out pending/retired for assignment; keep ineligible visible (with badge)
+            const options = (hint
+              ? allMPs.filter((m) => m.jurisdiction.toLowerCase() === hint)
+              : allMPs
+            ).filter((m) => m.status !== "pending" && m.status !== "retired");
             return (
               <Fragment key={seat.roster_slot_id}>
                 <tr>
                   <td>{seat.slot_label}</td>
                   <td>{seat.asset_name}</td>
+                  <td style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{seat.asset_type}</td>
                   <td><PartyBadge party={seat.party} /></td>
                   <td>{seat.jurisdiction}</td>
                   <td>
                     <button type="button" onClick={() => setEditingSeatSlot(editing ? null : seat.slot)}>
-                      {editing ? "Cancel" : "Change MP"}
+                      {editing ? "Cancel" : "Change"}
                     </button>
                   </td>
                 </tr>
                 {editing && (
                   <tr>
-                    <td colSpan={5}>
+                    <td colSpan={6}>
                       <div className="mp-picker-row">
-                        <span className="muted">{hint ? `Federal MPs` : `All MPs`} ({options.length})</span>
+                        <span className="muted">{hint ? `${hint.toUpperCase()} politicians` : `All politicians`} ({options.length})</span>
                         <select
                           defaultValue=""
                           onChange={(e) => { if (e.target.value) void onAssign(seat.slot, e.target.value); }}
                         >
-                          <option value="" disabled>Select an MP…</option>
+                          <option value="" disabled>Select a politician…</option>
                           {options.map((mp) => (
-                            <option key={mp.id} value={mp.id}>
-                              {mp.name} · {mp.party} · {mp.jurisdiction}
+                            <option
+                              key={mp.id}
+                              value={mp.id}
+                              disabled={mp.status === "ineligible"}
+                              style={mp.status === "ineligible" ? { color: "#7f8c8d" } : undefined}
+                            >
+                              {mp.full_name} · {mp.current_role || mp.party} · {mp.jurisdiction}
+                              {mp.status === "ineligible" ? " ⚠ Ineligible" : ""}
                             </option>
                           ))}
                         </select>

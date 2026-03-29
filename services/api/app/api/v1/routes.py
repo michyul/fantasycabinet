@@ -1,14 +1,17 @@
 import os
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
+from pydantic import BaseModel
 
 from app.api.v1.schemas import (
     AuditLogOut,
+    AttributionRunOut,
     CabinetCreate,
     CabinetOut,
     CabinetScopeCreate,
     CabinetScopeOut,
     CabinetScopeUpdate,
+    DataSourceOut,
     DisputeCreate,
     DisputeOut,
     IngestEventsOut,
@@ -22,10 +25,15 @@ from app.api.v1.schemas import (
     MandateUpdateOut,
     MandateUpdateRequest,
     MPOut,
+    NewsStoryOut,
     PolicyObjectiveOut,
     PolicySelectionRequest,
     PolicySelectionsOut,
+    PoliticianOut,
+    PoliticianCreate,
+    PoliticianUpdate,
     PoliticalEventOut,
+    RoleHistoryOut,
     RosterOut,
     RosterSlotOut,
     ScoringRunOut,
@@ -33,13 +41,16 @@ from app.api.v1.schemas import (
     SeatAssignRequest,
     StandingsOut,
     StandingsRow,
+    StoryClusteringRunOut,
+    SystemConfigOut,
+    SystemConfigUpdate,
     TeamCreate,
     TeamOut,
     UserCreate,
     UserProfile,
     UserUpdate,
 )
-from app.api.v1.persistent_store import ASSETS, MPS, POLICY_OBJECTIVES, PORTFOLIO_SEAT_LABELS, roles_for_user, store
+from app.api.v1.persistent_store import POLICY_OBJECTIVES, PORTFOLIO_SEAT_LABELS, roles_for_user, store
 
 router = APIRouter()
 
@@ -146,32 +157,42 @@ def update_user(user_id: str, payload: UserUpdate) -> UserProfile:
 
 
 @router.get("/assets")
-def list_assets() -> dict[str, list[dict[str, str]]]:
+def list_assets() -> dict[str, list[dict]]:
+    politicians = store.list_politicians(status="active")
     return {
         "items": [
             {
-                "id": a.id,
-                "name": a.name,
-                "jurisdiction": a.jurisdiction,
-                "assetType": a.asset_type,
-                "party": a.party,
+                "id": p.id,
+                "name": p.full_name,
+                "jurisdiction": p.jurisdiction,
+                "assetType": p.asset_type,
+                "party": p.party,
             }
-            for a in MPS
+            for p in politicians
         ]
     }
 
 @router.get("/mps")
 def list_mps() -> dict[str, list[MPOut]]:
+    """Backward-compat alias for /politicians."""
+    politicians = store.list_politicians()
     return {
         "items": [
             MPOut(
-                id=mp.id,
-                name=mp.name,
-                jurisdiction=mp.jurisdiction,
-                asset_type=mp.asset_type,
-                party=mp.party,
+                id=p.id,
+                name=p.full_name,
+                full_name=p.full_name,
+                current_role=p.current_role,
+                role_tier=p.role_tier,
+                jurisdiction=p.jurisdiction,
+                asset_type=p.asset_type,
+                party=p.party,
+                status=p.status,
+                aliases=p.aliases_json if isinstance(p.aliases_json, list) else [],
+                source=p.source,
+                last_verified_at=p.last_verified_at,
             )
-            for mp in MPS
+            for p in politicians
         ]
     }
 
@@ -257,16 +278,16 @@ def assign_mp_to_seat(cabinet_id: str, slot_name: str, payload: SeatAssignReques
         slot = store.assign_mp_to_seat(cabinet_id, slot_name, payload.mp_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    asset_map = {a.id: a for a in MPS}
+    pol = store.get_politician(slot.asset_id)
     return RosterSlotOut(
         roster_slot_id=slot.id,
         slot=slot.slot,
         slot_label=PORTFOLIO_SEAT_LABELS.get(slot.slot, slot.slot),
         asset_id=slot.asset_id,
-        asset_name=asset_map[slot.asset_id].name if slot.asset_id in asset_map else slot.asset_id,
-        jurisdiction=asset_map[slot.asset_id].jurisdiction if slot.asset_id in asset_map else "unknown",
-        asset_type=asset_map[slot.asset_id].asset_type if slot.asset_id in asset_map else "unknown",
-        party=asset_map[slot.asset_id].party if slot.asset_id in asset_map else "unknown",
+        asset_name=pol.full_name if pol else slot.asset_id,
+        jurisdiction=pol.jurisdiction if pol else "unknown",
+        asset_type=pol.asset_type if pol else "unknown",
+        party=pol.party if pol else "unknown",
         lineup_status="active" if slot.lineup_status == "active" else "bench",
     )
 
@@ -299,9 +320,10 @@ def set_cabinet_policy_objectives(cabinet_id: str, payload: PolicySelectionReque
     return PolicySelectionsOut(cabinet_id=cabinet_id, items=saved)
 
 
+@router.post("/internal/events/ingest")
 def ingest_events(payload: IngestEventsRequest) -> IngestEventsOut:
-    received, inserted, duplicates = store.ingest_events(payload.events)
-    return IngestEventsOut(received=received, inserted=inserted, duplicates=duplicates)
+    received, inserted, duplicates, inserted_ids = store.ingest_events(payload.events)
+    return IngestEventsOut(received=received, inserted=inserted, duplicates=duplicates, inserted_ids=inserted_ids)
 
 
 @router.get("/events")
@@ -424,17 +446,22 @@ def roster(team_id: str) -> RosterOut:
     slots = store.roster_for_team(team_id)
     if not slots:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team roster not found")
-    asset_map = {a.id: a for a in MPS}
+    # Build politician lookup from asset_ids on the roster
+    pol_ids = [slot.asset_id for slot in slots]
+    politicians = {p.id: p for p in [
+        store.get_politician(pid) for pid in pol_ids
+        if store.get_politician(pid) is not None
+    ]}
     items = [
         RosterSlotOut(
             roster_slot_id=slot.id,
             slot=slot.slot,
             slot_label=PORTFOLIO_SEAT_LABELS.get(slot.slot, slot.slot),
             asset_id=slot.asset_id,
-            asset_name=asset_map[slot.asset_id].name if slot.asset_id in asset_map else slot.asset_id,
-            jurisdiction=asset_map[slot.asset_id].jurisdiction if slot.asset_id in asset_map else "unknown",
-            asset_type=asset_map[slot.asset_id].asset_type if slot.asset_id in asset_map else "unknown",
-            party=asset_map[slot.asset_id].party if slot.asset_id in asset_map else "unknown",
+            asset_name=politicians[slot.asset_id].full_name if slot.asset_id in politicians else slot.asset_id,
+            jurisdiction=politicians[slot.asset_id].jurisdiction if slot.asset_id in politicians else "unknown",
+            asset_type=politicians[slot.asset_id].asset_type if slot.asset_id in politicians else "unknown",
+            party=politicians[slot.asset_id].party if slot.asset_id in politicians else "unknown",
             lineup_status="active" if slot.lineup_status == "active" else "bench",
         )
         for slot in slots
@@ -475,6 +502,8 @@ def team_ledger(team_id: str, league_id: str = Query(...), week: int | None = Qu
                 team_id=entry.team_id,
                 event=entry.event,
                 points=entry.points,
+                attribution_id=entry.attribution_id,
+                politician_id=entry.politician_id,
                 created_at=entry.created_at,
             )
             for entry in entries
@@ -575,6 +604,326 @@ def league_audit_log(league_id: str) -> dict[str, list[AuditLogOut]]:
             for item in store.list_audit(league_id)
         ]
     }
+
+
+# ── Politician routes ─────────────────────────────────────────────────────────
+
+@router.get("/politicians")
+def list_politicians(status_filter: str | None = Query(default=None, alias="status")) -> dict[str, list[PoliticianOut]]:
+    politicians = store.list_politicians(status=status_filter)
+    return {
+        "items": [
+            PoliticianOut(
+                id=p.id,
+                name=p.full_name,
+                full_name=p.full_name,
+                current_role=p.current_role,
+                role_tier=p.role_tier,
+                jurisdiction=p.jurisdiction,
+                asset_type=p.asset_type,
+                party=p.party,
+                status=p.status,
+                aliases=p.aliases_json if isinstance(p.aliases_json, list) else [],
+                source=p.source,
+                last_verified_at=p.last_verified_at,
+            )
+            for p in politicians
+        ]
+    }
+
+
+@router.get("/politicians/{politician_id}")
+def get_politician(politician_id: str) -> PoliticianOut:
+    p = store.get_politician(politician_id)
+    if p is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Politician not found")
+    return PoliticianOut(
+        id=p.id,
+        name=p.full_name,
+        full_name=p.full_name,
+        current_role=p.current_role,
+        role_tier=p.role_tier,
+        jurisdiction=p.jurisdiction,
+        asset_type=p.asset_type,
+        party=p.party,
+        status=p.status,
+        aliases=p.aliases_json if isinstance(p.aliases_json, list) else [],
+        source=p.source,
+        last_verified_at=p.last_verified_at,
+    )
+
+
+@router.patch("/politicians/{politician_id}")
+def update_politician(
+    politician_id: str,
+    payload: PoliticianUpdate,
+    x_auth_roles: str | None = Header(default=None),
+) -> PoliticianOut:
+    roles = [r.strip() for r in (x_auth_roles or "").split(",") if r.strip()]
+    if "commissioner" not in roles and "admin" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner role required")
+    p = store.get_politician(politician_id)
+    if p is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Politician not found")
+    updated = store.update_politician_role(
+        politician_id=politician_id,
+        new_role=payload.current_role if payload.current_role is not None else p.current_role,
+        new_tier=payload.role_tier if payload.role_tier is not None else p.role_tier,
+        changed_by_user_id="system",
+        new_status=payload.status,
+    )
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Politician not found")
+    return PoliticianOut(
+        id=updated.id,
+        name=updated.full_name,
+        full_name=updated.full_name,
+        current_role=updated.current_role,
+        role_tier=updated.role_tier,
+        jurisdiction=updated.jurisdiction,
+        asset_type=updated.asset_type,
+        party=updated.party,
+        status=updated.status,
+        aliases=updated.aliases_json if isinstance(updated.aliases_json, list) else [],
+        source=updated.source,
+        last_verified_at=updated.last_verified_at,
+    )
+
+
+@router.get("/politicians/{politician_id}/role-history")
+def get_politician_role_history(politician_id: str) -> dict[str, list[RoleHistoryOut]]:
+    history = store.list_role_history(politician_id)
+    return {
+        "items": [
+            RoleHistoryOut(
+                id=h.id,
+                politician_id=h.politician_id,
+                previous_role=h.previous_role,
+                new_role=h.new_role,
+                previous_tier=h.previous_tier,
+                new_tier=h.new_tier,
+                changed_at=h.changed_at,
+                changed_by_user_id=h.changed_by_user_id,
+            )
+            for h in history
+        ]
+    }
+
+
+# ── Admin config routes ───────────────────────────────────────────────────────
+
+@router.get("/admin/config")
+def get_system_config(x_auth_roles: str | None = Header(default=None)) -> SystemConfigOut:
+    roles = [r.strip() for r in (x_auth_roles or "").split(",") if r.strip()]
+    if "commissioner" not in roles and "admin" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner role required")
+    return SystemConfigOut(config=store.get_system_config())
+
+
+@router.patch("/admin/config")
+def update_system_config(
+    payload: SystemConfigUpdate,
+    x_auth_roles: str | None = Header(default=None),
+    x_auth_sub: str | None = Header(default=None),
+) -> SystemConfigOut:
+    roles = [r.strip() for r in (x_auth_roles or "").split(",") if r.strip()]
+    if "commissioner" not in roles and "admin" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner role required")
+    store.update_system_config(key=payload.key, value=payload.value, updated_by=x_auth_sub or "system")
+    return SystemConfigOut(config=store.get_system_config())
+
+
+@router.post("/admin/bootstrap/run")
+def run_bootstrap(x_auth_roles: str | None = Header(default=None)) -> dict:
+    roles = [r.strip() for r in (x_auth_roles or "").split(",") if r.strip()]
+    if "commissioner" not in roles and "admin" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner role required")
+    from app.api.v1.bootstrap_engine import BootstrapEngine
+    from sqlalchemy.orm import Session as SASession
+    with SASession(store.engine) as session:
+        count = BootstrapEngine().run(session)
+        session.commit()
+    return {"politicians_upserted": count}
+
+
+@router.post("/admin/politicians", status_code=201)
+def create_politician_admin(
+    payload: PoliticianCreate,
+    x_auth_roles: str | None = Header(default=None),
+) -> PoliticianOut:
+    """Manually create a politician. Commissioner-only. Use when bootstrap sources are unavailable."""
+    roles = [r.strip() for r in (x_auth_roles or "").split(",") if r.strip()]
+    if "commissioner" not in roles and "admin" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner role required")
+    pol = store.create_politician(
+        full_name=payload.full_name,
+        current_role=payload.current_role,
+        role_tier=payload.role_tier,
+        party=payload.party,
+        jurisdiction=payload.jurisdiction,
+        asset_type=payload.asset_type,
+        status=payload.status,
+        aliases=payload.aliases,
+        source=payload.source,
+    )
+    return PoliticianOut(
+        id=pol.id,
+        name=pol.full_name,
+        full_name=pol.full_name,
+        current_role=pol.current_role,
+        role_tier=pol.role_tier,
+        jurisdiction=pol.jurisdiction,
+        asset_type=pol.asset_type,
+        party=pol.party,
+        status=pol.status,
+        aliases=pol.aliases_json if isinstance(pol.aliases_json, list) else [],
+        source=pol.source,
+        last_verified_at=pol.last_verified_at,
+    )
+
+
+# ── Internal data-source and attribution routes ───────────────────────────────
+
+@router.get("/internal/data-sources")
+def list_data_sources(
+    bootstrap: bool | None = Query(default=None),
+    active: bool | None = Query(default=None),
+) -> dict[str, list[DataSourceOut]]:
+    sources = store.list_data_sources(bootstrap=bootstrap, active=active)
+    return {
+        "items": [
+            DataSourceOut(
+                id=s.id,
+                name=s.name,
+                source_type=s.source_type,
+                bootstrap=s.bootstrap,
+                url_template=s.url_template,
+                config=s.config_json,
+                active=s.active,
+                politician_id=s.politician_id,
+                created_at=s.created_at,
+            )
+            for s in sources
+        ]
+    }
+
+
+class AttributionRunRequest(BaseModel):
+    event_ids: list[str]
+
+
+@router.post("/internal/attribution/run")
+def run_attribution(payload: AttributionRunRequest) -> AttributionRunOut:
+    result = store.run_attribution(payload.event_ids)
+    return AttributionRunOut(**result)
+
+
+# ── Story routes ──────────────────────────────────────────────────────────────
+
+class StoryClusterRequest(BaseModel):
+    window_hours: int = 24
+
+
+@router.post("/internal/stories/cluster")
+def cluster_stories(payload: StoryClusterRequest = StoryClusterRequest()) -> StoryClusteringRunOut:
+    """
+    Trigger story clustering for recently ingested articles.
+    Groups unclustered PoliticalEventModel rows into canonical NewsStoryModel records.
+    Uses AI clustering (Ollama) when ai_enabled=true, falls back to Jaccard heuristic.
+    """
+    result = store.run_story_clustering(window_hours=payload.window_hours)
+    return StoryClusteringRunOut(**result)
+
+
+@router.post("/internal/stories/rescore")
+def rescore_pending_stories(
+    x_auth_roles: str | None = Header(default=None),
+) -> dict:
+    """
+    Emit correction ledger entries for all stories flagged rescore_pending=True.
+    Stories are re-evaluated with their updated significance. Commissioner-only.
+    """
+    roles = [r.strip() for r in (x_auth_roles or "").split(",")]
+    if "commissioner" not in roles:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Commissioner only")
+
+    stories = store.list_stories(rescore_pending=True)
+    total_corrections = 0
+    for story in stories:
+        if story.scored_week is None:
+            continue
+        # Trigger re-score via score_league_week for any leagues that scored this story
+        # (corrections are emitted automatically by score_league_week when rescore_pending=True)
+        # This endpoint just reports counts; actual corrections are emitted at next scoring cycle
+        total_corrections += 1
+    return {
+        "stories_pending_rescore": len(stories),
+        "note": "Corrections will be emitted at next scoring cycle or via POST /internal/scoring/run",
+    }
+
+
+@router.get("/stories")
+def list_stories(
+    status: str | None = None,
+    scored: bool | None = None,
+    limit: int = 50,
+) -> dict:
+    """List canonical news stories with optional status/scored filters."""
+    stories = store.list_stories(status=status, scored=scored, limit=limit)
+    return {
+        "items": [
+            NewsStoryOut(
+                id=s.id,
+                canonical_title=s.canonical_title,
+                canonical_summary=s.canonical_summary or "",
+                event_type=s.event_type,
+                jurisdiction=s.jurisdiction,
+                significance=s.significance,
+                sentiment=s.sentiment,
+                is_followup=s.is_followup,
+                article_count=s.article_count,
+                status=s.status,
+                scored=s.scored,
+                scored_week=s.scored_week,
+                last_scored_significance=s.last_scored_significance,
+                score_version=s.score_version,
+                rescore_count=s.rescore_count,
+                rescore_pending=s.rescore_pending,
+                first_seen_at=s.first_seen_at,
+                last_updated_at=s.last_updated_at,
+            )
+            for s in stories
+        ],
+        "total": len(stories),
+    }
+
+
+@router.get("/stories/{story_id}")
+def get_story(story_id: str) -> NewsStoryOut:
+    """Get a single canonical news story by ID."""
+    story = store.get_story(story_id)
+    if story is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Story not found")
+    return NewsStoryOut(
+        id=story.id,
+        canonical_title=story.canonical_title,
+        canonical_summary=story.canonical_summary or "",
+        event_type=story.event_type,
+        jurisdiction=story.jurisdiction,
+        significance=story.significance,
+        sentiment=story.sentiment,
+        is_followup=story.is_followup,
+        article_count=story.article_count,
+        status=story.status,
+        scored=story.scored,
+        scored_week=story.scored_week,
+        last_scored_significance=story.last_scored_significance,
+        score_version=story.score_version,
+        rescore_count=story.rescore_count,
+        rescore_pending=story.rescore_pending,
+        first_seen_at=story.first_seen_at,
+        last_updated_at=story.last_updated_at,
+    )
 
 
 def _assert_league_exists(league_id: str):

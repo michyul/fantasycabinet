@@ -2,93 +2,227 @@
 
 ## Principles
 
-1. **Deterministic**: identical events always score identically.
-2. **Auditable**: every score links to a source event and rule version.
-3. **Balanced**: no single category dominates season outcomes.
-4. **Nonpartisan**: rules reward measurable activity and outcomes only.
+1. **Story-based, not article-based**: scoring is driven by canonical *news stories* — 100 articles about the same cabinet reshuffle count as one story.
+2. **AI-augmented, deterministically floored**: the engine uses Ollama to assess story significance (1–10) and sentiment (−1 to +1). AI contribution is bounded by `ai_confidence_weight` so rules remain the floor.
+3. **Self-correcting**: stories can be re-scored up to three times as significance evolves. Corrections appear as delta ledger entries.
+4. **Transparent and auditable**: every ledger entry links to `story_id`, `attribution_id`, `politician_id`, and `rule_id`.
+5. **Inflation-resistant**: per-story caps, follow-up discounts, and the sentiment factor prevent a single viral story from dominating a week.
+
+---
+
+## Full pipeline
+
+```
+RSS feeds (worker, every ~60 s)
+        │
+        ▼
+PoliticalEventModel          ingest_events → returns inserted_ids
+        │  story_id = NULL
+        ▼
+StoryClusteringEngine        news_analysis_client: AI cluster or Jaccard fallback
+        │
+        ▼
+NewsStoryModel               canonical_title, significance (1–10), sentiment (−1–1)
+        │
+        ▼
+AttributionEngine            EventAttributionModel: politician → story articles
+        │  confidence ≥ 0.65
+        ▼
+ScoringEngine                score_teams_for_stories() → ScoringResult list
+        │
+        ▼
+LedgerEntryModel             story_id, attribution_id, politician_id, rule_id
+        │
+        └─ Re-score check (story.rescore_pending = True)
+              │ if |Δsignificance| ≥ 1.5
+              ▼
+           correction LedgerEntryModel    [CORRECTION] prefix, up to 3×
+```
+
+---
+
+## Story clustering
+
+The `StoryClusteringEngine` runs after every ingest batch. It takes all `PoliticalEventModel` rows where `story_id IS NULL` and groups them into `NewsStoryModel` records.
+
+### AI clustering (preferred)
+
+A single structured Ollama call (`format: "json"`) receives up to 25 article titles + summaries and returns:
+
+```json
+{
+  "clusters": [
+    {
+      "canonical_title": "Federal budget passes third reading",
+      "event_type": "legislative",
+      "jurisdiction": "federal",
+      "significance": 7.5,
+      "sentiment": 0.2,
+      "is_followup": false,
+      "indices": [0, 2, 4]
+    }
+  ]
+}
+```
+
+Every article index appears in exactly one cluster. The engine validates schema, caps significance to [1, 10] and sentiment to [−1, 1], and ensures no articles are dropped.
+
+### Heuristic fallback (AI unavailable)
+
+Jaccard similarity on normalised title token sets (stop-words removed):
+
+- Similarity ≥ 0.45 → same story
+- Canonical title = longest title in cluster
+- Default significance from event_type table
+- Sentinel sentiment = 0.0 (neutral)
+
+### Default significance by event_type
+
+| Event type | Default significance |
+|------------|---------------------|
+| confidence | 8.0 |
+| ethics | 6.5 |
+| election | 6.0 |
+| intergovernmental | 5.5 |
+| legislative | 5.5 |
+| executive | 5.0 |
+| policy | 4.5 |
+| opposition | 4.0 |
+| general | 3.0 |
+
+---
+
+## Story lifecycle
+
+| Status | Condition | Behaviour |
+|--------|-----------|-----------|
+| `active` | < 24 h old | Accepts new articles; re-scoring triggered when delta-significance >= 1.5 |
+| `settling` | 24–48 h old | New articles still cluster in; higher delta threshold (2.5) for re-score |
+| `archived` | > 48 h old | No further scoring updates |
+
+---
+
+## Scoring formula
+
+For each (team, active_slot, story) triple where the slot's politician is attributed to the story:
+
+```
+S_raw = BasePoints x SignificanceMultiplier x FollowupDiscount x SentimentFactor x ConfidenceMultiplier
+S_final = clamp(S_raw + PolicyBonus x SignificanceMultiplier, -S_cap, +S_cap)
+```
+
+where S_cap = max_story_points (default 15, configurable in system_config).
+
+### Significance multiplier
+
+```
+SignificanceMultiplier = significance / 5.0
+```
+
+A story with significance 5 scores at 1x base. Significance 10 = 2x. Significance 1 = 0.2x.
+
+### Follow-up discount
+
+Follow-up coverage (subsequent articles about an ongoing story) scores at 50% of normal points.
+
+### Sentiment factor
+
+The story sentiment (-1 to +1) affects scores differently by asset_type:
+
+| Asset type | Sentiment +1.0 | Sentiment -1.0 |
+|------------|---------------|----------------|
+| executive / cabinet | 1.25x | 0.50x |
+| opposition | 0.875x | 1.25x |
+| parliamentary | 1.00x | 0.80x |
+
+Government scandals (negative sentiment) reduce executive/cabinet scores and boost opposition scores. Positive government news reverses this.
+
+### Attribution confidence multiplier
+
+| Type | Confidence | Point multiplier |
+|------|-----------|------------------|
+| direct_name | 0.95 | 1.00 |
+| alias | 0.90 | 0.95 |
+| role_title | 0.65 | 0.60 |
+
+Attribution confidence floor: **0.65** — stories not attributed at this level score zero for that politician.
+
+Story-level attributions are derived by aggregating all article-level attributions within a story, grouping by politician, and keeping the highest-confidence attribution per politician.
+
+### Per-story cap
+
+No single story can award more than +/-max_story_points (default 15) to any team in any week.
+
+---
+
+## Re-scoring (corrections)
+
+When a story's significance changes by >= 1.5 points (via new AI assessment or admin update):
+
+1. Look up all existing ledger entries for (story_id, team_id, week, league_id).
+2. Calculate correction = new_score - old_total.
+3. If |correction| >= 1: write a correction LedgerEntryModel with event title "[CORRECTION] {canonical_title}".
+4. Increment story.score_version and story.rescore_count.
+5. Maximum 3 re-scores per story.
+
+---
 
 ## Weekly score formula
 
-For each active MP-seat assignment $a$ in week $w$:
+```
+FinalScore(w) = sum over active slots of Score(slot, w) + PolicyBonus(w) - Penalty(w)
+```
 
-$$
-Score(a,w)=\sum_i BasePoints(event_i)\times ContextMultiplier(event_i) + Bonus(a,w)-Penalty(a,w)
-$$
+PolicyBonus fires when at least one story in the week matches a policy objective's event_types.
 
-Cabinet weekly score:
+### Ineligibility penalty (deferred)
 
-$$
-CabinetScore(w)=\sum_{a\in ActiveCabinet} Score(a,w)
-$$
+Applied at the start of the next cycle, not mid-week:
 
-Active roster constraints in the current MVP:
+| Change | Points |
+|--------|--------|
+| status -> ineligible | -3 for all teams holding them |
+| Promotion (role_tier decreases) | +5 for teams holding them |
+| Lateral (role_tier unchanged) | +2 for teams holding them |
 
-- $|ActiveCabinet|=4$
-- At least one federal active slot
-- At least one provincial active slot
+---
 
-Optional policy objective contribution:
+## Base point table (rule version v1)
 
-$$
-PolicyBonus(w)=\sum_j ObjectiveWeight_j\times ObjectiveHitRate_j
-$$
+| Event type | executive | cabinet | opposition | parliamentary |
+|------------|-----------|---------|------------|---------------|
+| legislative | 6 | 5 | 4 | 3 |
+| executive | 8 | 6 | 3 | 2 |
+| policy | 5 | 5 | 4 | 3 |
+| confidence | 10 | 8 | 6 | 4 |
+| ethics | -8 | -6 | +5 | 2 |
+| intergovernmental | 6 | 5 | 3 | 2 |
+| opposition | 2 | 2 | 7 | 4 |
+| election | 5 | 4 | 5 | 3 |
+| leadership_change | 8 | 6 | 5 | 3 |
+| general | 2 | 2 | 2 | 1 |
 
-Final weekly total:
+---
 
-$$
-FinalScore(w)=CabinetScore(w)+PolicyBonus(w)-CompliancePenalty(w)
-$$
+## AI significance multiplier (optional)
 
-## Base category points
+When ai_enabled = true, NewsAnalysisClient calls Ollama with format:json for structured significance
+assessment. The AI contribution is bounded: AI can shift scores by at most +-30% from the rule-only
+value at the default ai_confidence_weight = 0.3.
 
-- **Legislative action**
-  - Bill introduced (eligible role): +2
-  - Bill advanced stage: +3
-  - Bill passed chamber/final assent milestone: +6
+---
 
-- **Executive governance**
-  - Cabinet appointment stability event: +2
-  - Major portfolio delivery milestone: +5
-  - Formal intergovernmental agreement signed: +7
+## System config keys (scoring-relevant)
 
-- **Accountability and ethics**
-  - Verified ethics breach ruling: -8
-  - Official correction/rectification event: +2 (capped)
-
-- **Confidence and coalition dynamics**
-  - Confidence vote survival: +5
-  - Confidence defeat: -10
-
-- **Provincial-federal coordination**
-  - Joint policy framework milestone: +4
-  - Public negotiation breakdown with formal cancellation: -3
-
-## Context multipliers
-
-- High-impact national/provincial budget event: $\times1.3$
-- Election period bonus window (if cabinet scope enables): $\times1.2$
-- Duplicate-event suppression: later duplicates $\times0.0$
-
-## Bonuses
-
-- Balanced roster bonus (minimum asset diversity thresholds): +5/week
-- Underdog upset (head-to-head only): +3
-- Prediction challenge (capped): +0 to +4
-- Policy objective alignment bonus (capped): +0 to +5
-
-## Penalties
-
-- Inactive slot penalty (asset not eligible/active per rules): -2 each
-- Overconcentration penalty (too many assets from one domain, optional): -3
-- Invalid mandate configuration after lock: zero points for illegal slot
-
-## Caps and safeguards
-
-- Max positive points per single asset per week: +25
-- Max negative points per single asset per week: -20
-- Category cap to reduce volatility clustering
-
-## Rule versioning
-
-- Each score references `scoring_ruleset_version`.
-- Version updates apply only to new weeks unless scope commissioner opts in.
+| Key | Default | Effect |
+|-----|---------|--------|
+| ai_enabled | false | Enable Ollama AI calls |
+| ai_model | mistral | Ollama model name |
+| ai_base_url | http://10.11.235.71:11434 | Ollama endpoint |
+| ai_confidence_weight | 0.3 | AI multiplier weight |
+| attribution_confidence_floor | 0.65 | Minimum confidence to attribute |
+| max_points_per_asset_week | 25 | Weekly per-asset cap (positive) |
+| min_points_per_asset_week | -20 | Weekly per-asset cap (negative) |
+| max_story_points | 15 | Per-story per-team cap |
+| scoring_rule_version | v1 | Active scoring ruleset |
+| story_rescore_threshold | 1.5 | Min delta-significance to trigger re-score |

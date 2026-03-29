@@ -104,6 +104,8 @@ class LedgerEntryOut(BaseModel):
     team_id: str
     event: str
     points: int
+    attribution_id: str | None = None
+    politician_id: str | None = None
     created_at: datetime
 
 
@@ -149,6 +151,7 @@ class IngestEventsOut(BaseModel):
     received: int
     inserted: int
     duplicates: int
+    inserted_ids: list[str] = Field(default_factory=list)
 
 
 class PoliticalEventOut(BaseModel):
@@ -191,11 +194,108 @@ class AuditLogOut(BaseModel):
 
 
 class MPOut(BaseModel):
+    """Canonical politician representation. MPOut kept as alias for backward compat."""
     id: str
-    name: str
+    name: str              # display name (= full_name for DB politicians)
+    full_name: str
+    current_role: str = ""
+    role_tier: int = 5
     jurisdiction: str
     asset_type: str
     party: str
+    status: str = "active"   # active|pending|ineligible|retired
+    aliases: list[str] = Field(default_factory=list)
+    source: str = "bootstrap"
+    last_verified_at: datetime | None = None
+
+
+# Full schema used for /politicians endpoints
+PoliticianOut = MPOut
+
+
+class PoliticianCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    current_role: str = ""
+    role_tier: int = 5
+    party: str = "independent"
+    jurisdiction: str = "federal"
+    asset_type: str = "parliamentary"  # executive|cabinet|opposition|parliamentary
+    status: str = "active"            # active|pending|ineligible|retired
+    aliases: list[str] = Field(default_factory=list)
+    source: str = "admin"
+
+
+class PoliticianUpdate(BaseModel):
+    current_role: str | None = None
+    role_tier: int | None = None
+    status: str | None = None
+    aliases: list[str] | None = None
+
+
+class RoleHistoryOut(BaseModel):
+    id: str
+    politician_id: str
+    previous_role: str
+    new_role: str
+    previous_tier: int
+    new_tier: int
+    changed_at: datetime
+    changed_by_user_id: str
+
+
+class DataSourceOut(BaseModel):
+    id: str
+    name: str
+    source_type: str
+    bootstrap: bool
+    url_template: str
+    config: dict
+    active: bool
+    politician_id: str | None = None
+    created_at: datetime
+
+
+class AttributionRunOut(BaseModel):
+    event_ids_processed: int
+    attributions_written: int
+
+
+class NewsStoryOut(BaseModel):
+    """Canonical news story — the unit of scoring above raw articles."""
+    id: str
+    canonical_title: str
+    canonical_summary: str
+    event_type: str
+    jurisdiction: str
+    significance: float          # 1–10
+    sentiment: float             # −1 to +1
+    is_followup: bool
+    article_count: int
+    status: str                  # active|settling|archived
+    scored: bool
+    scored_week: int | None = None
+    last_scored_significance: float | None = None
+    score_version: int
+    rescore_count: int
+    rescore_pending: bool
+    first_seen_at: datetime
+    last_updated_at: datetime
+
+
+class StoryClusteringRunOut(BaseModel):
+    stories_created: int
+    stories_updated: int
+    articles_assigned: int
+    rescore_triggers: int
+
+
+class SystemConfigOut(BaseModel):
+    config: dict
+
+
+class SystemConfigUpdate(BaseModel):
+    key: str
+    value: object
 
 
 class SeatAssignRequest(BaseModel):
