@@ -228,6 +228,33 @@ class RoleClassificationModel(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class ManagerStatsModel(Base):
+    """Per-user, per-league streak tracking."""
+    __tablename__ = "manager_stats"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    league_id: Mapped[str] = mapped_column(String(36), ForeignKey("leagues.id"), index=True)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), index=True, unique=True)
+    participation_streak: Mapped[int] = mapped_column(Integer, default=0)
+    positive_streak: Mapped[int] = mapped_column(Integer, default=0)
+    longest_participation_streak: Mapped[int] = mapped_column(Integer, default=0)
+    longest_positive_streak: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AchievementModel(Base):
+    """Earned achievements for a cabinet."""
+    __tablename__ = "achievements"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), index=True)
+    achievement_id: Mapped[str] = mapped_column(String(40), index=True)
+    earned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    week: Mapped[int] = mapped_column(Integer)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
 class NewsStoryModel(Base):
     """
     A canonical news story derived from clustering multiple raw PoliticalEventModel
@@ -603,6 +630,12 @@ class PersistentStore:
                 raise ValueError("Mandate configuration must include at least one provincial governing slot")
 
             session.commit()
+            self._add_audit_direct(
+                team.league_id,
+                team.manager_user_id,
+                "team.mandate.updated",
+                {"teamId": team_id, "activeSlotsCount": active_count},
+            )
             return active_count, len(slots) - active_count
 
     def ingest_events(self, events: list[PoliticalEventIn]) -> tuple[int, int, int, list[str]]:
@@ -886,16 +919,326 @@ class PersistentStore:
             scored_week = league.current_week
             league.current_week += 1
             session.commit()
-            return scored_week, created
 
-    def standings(self, league_id: str) -> list[tuple[TeamModel, int]]:
+        # Post-scoring: update streaks and evaluate achievements
+        self._update_streaks(league_id, scored_week)
+        self._evaluate_achievements(league_id, scored_week)
+        return scored_week, created
+
+    def _update_streaks(self, league_id: str, scored_week: int) -> None:
+        """Update participation and positive streaks for every team in the league after a scoring cycle."""
+        with Session(self.engine) as session:
+            teams = list(session.scalars(select(TeamModel).where(TeamModel.league_id == league_id)))
+
+            # Determine the cutoff: mandate changes must have occurred after the previous
+            # scoring cycle completed (or from the epoch if this is the first cycle).
+            last_scoring_at: datetime | None = session.scalar(
+                select(AuditLogModel.created_at)
+                .where(
+                    AuditLogModel.league_id == league_id,
+                    AuditLogModel.action == "scoring.week.completed",
+                )
+                .order_by(AuditLogModel.created_at.desc())
+                .limit(1)
+            )
+            epoch = datetime.min.replace(tzinfo=timezone.utc)
+            cutoff = last_scoring_at or epoch
+
+            for team in teams:
+                # Participation: did manager make a mandate/portfolio change since the last scoring cycle?
+                mandate_change_count = session.scalar(
+                    select(func.count(AuditLogModel.id)).where(
+                        AuditLogModel.league_id == league_id,
+                        AuditLogModel.actor_user_id == team.manager_user_id,
+                        AuditLogModel.action == "team.mandate.updated",
+                        AuditLogModel.created_at > cutoff,
+                    )
+                ) or 0
+                # Positive streak: did the team score > 0 this week?
+                week_total = session.scalar(
+                    select(func.coalesce(func.sum(LedgerEntryModel.points), 0)).where(
+                        LedgerEntryModel.league_id == league_id,
+                        LedgerEntryModel.team_id == team.id,
+                        LedgerEntryModel.week == scored_week,
+                    )
+                ) or 0
+
+                stats = session.scalar(
+                    select(ManagerStatsModel).where(ManagerStatsModel.team_id == team.id)
+                )
+                if stats is None:
+                    stats = ManagerStatsModel(
+                        id=f"stats-{uuid4().hex[:12]}",
+                        user_id=team.manager_user_id,
+                        league_id=league_id,
+                        team_id=team.id,
+                        participation_streak=0,
+                        positive_streak=0,
+                        longest_participation_streak=0,
+                        longest_positive_streak=0,
+                        updated_at=utcnow(),
+                    )
+                    session.add(stats)
+
+                if mandate_change_count > 0:
+                    stats.participation_streak += 1
+                else:
+                    stats.participation_streak = 0
+                if stats.participation_streak > stats.longest_participation_streak:
+                    stats.longest_participation_streak = stats.participation_streak
+
+                if week_total > 0:
+                    stats.positive_streak += 1
+                else:
+                    stats.positive_streak = 0
+                if stats.positive_streak > stats.longest_positive_streak:
+                    stats.longest_positive_streak = stats.positive_streak
+
+                stats.updated_at = utcnow()
+
+            session.commit()
+
+    # ── Achievement definitions ───────────────────────────────────────────────
+    ACHIEVEMENT_DEFS: list[dict] = [
+        {"id": "qp-mvp",             "name": "Question Period MVP",     "description": "One of your MPs dominated the week"},
+        {"id": "confidence-supply",  "name": "Confidence & Supply",     "description": "Carried by a single performer"},
+        {"id": "ethics-commissioner","name": "Ethics Commissioner",     "description": "Sometimes the news isn't good"},
+        {"id": "premiers-conference","name": "Premier's Conference",    "description": "Your provincial picks paid off together"},
+        {"id": "shadow-cabinet",     "name": "Shadow Cabinet",          "description": "Strength from the backbench"},
+        {"id": "first-blood",        "name": "First Blood",             "description": "Welcome to the game"},
+        {"id": "iron-streak-3",      "name": "Iron Streak (3)",         "description": "Three in a row"},
+        {"id": "iron-streak-5",      "name": "Iron Streak (5)",         "description": "Unstoppable momentum"},
+        {"id": "comeback-kid",       "name": "Comeback Kid",            "description": "From the bottom to the top"},
+        {"id": "full-house",         "name": "Full House",              "description": "Everyone delivered"},
+    ]
+
+    def _already_earned(self, session: Session, team_id: str, achievement_id: str) -> bool:
+        return session.scalar(
+            select(func.count(AchievementModel.id)).where(
+                AchievementModel.team_id == team_id,
+                AchievementModel.achievement_id == achievement_id,
+            )
+        ) > 0
+
+    def _grant_achievement(
+        self,
+        session: Session,
+        team_id: str,
+        achievement_id: str,
+        week: int,
+        metadata: dict,
+    ) -> AchievementModel:
+        ach = AchievementModel(
+            id=f"ach-{uuid4().hex[:12]}",
+            team_id=team_id,
+            achievement_id=achievement_id,
+            earned_at=utcnow(),
+            week=week,
+            metadata_json=metadata,
+        )
+        session.add(ach)
+        return ach
+
+    def _evaluate_achievements(self, league_id: str, scored_week: int) -> list[str]:
+        """Evaluate all achievement conditions for each team and grant new ones."""
+        newly_earned: list[str] = []
+        with Session(self.engine) as session:
+            teams = list(session.scalars(select(TeamModel).where(TeamModel.league_id == league_id)))
+
+            for team in teams:
+                team_id = team.id
+
+                # All ledger entries for this team this week
+                week_entries = list(session.scalars(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.team_id == team_id,
+                        LedgerEntryModel.week == scored_week,
+                    )
+                ))
+                week_total = sum(e.points for e in week_entries)
+
+                # Per-politician scores this week (aggregate by politician_id)
+                pol_scores: dict[str, int] = {}
+                for e in week_entries:
+                    if e.politician_id:
+                        pol_scores[e.politician_id] = pol_scores.get(e.politician_id, 0) + e.points
+
+                # Active roster slots
+                active_slots = list(session.scalars(
+                    select(RosterSlotModel).where(
+                        RosterSlotModel.team_id == team_id,
+                        RosterSlotModel.lineup_status == "active",
+                    )
+                ))
+                active_pol_ids = {s.asset_id for s in active_slots}
+
+                # All-time ledger for this team (for first-blood)
+                all_time_total = session.scalar(
+                    select(func.coalesce(func.sum(LedgerEntryModel.points), 0)).where(
+                        LedgerEntryModel.team_id == team_id
+                    )
+                ) or 0
+
+                # ── qp-mvp: any politician scores 20+ in a single week ────────
+                if not self._already_earned(session, team_id, "qp-mvp"):
+                    top_pol = max(pol_scores.values(), default=0)
+                    if top_pol >= 20:
+                        top_pol_id = max(pol_scores, key=lambda k: pol_scores[k])
+                        pol_name = session.scalar(
+                            select(PoliticianModel.full_name).where(PoliticianModel.id == top_pol_id)
+                        ) or top_pol_id
+                        newly_earned.append("qp-mvp")
+                        self._grant_achievement(session, team_id, "qp-mvp", scored_week,
+                                                {"politicianId": top_pol_id, "politicianName": pol_name, "points": top_pol})
+
+                # ── confidence-supply: win week where only 1 active MP scored positive ──
+                if not self._already_earned(session, team_id, "confidence-supply"):
+                    active_positive = [pid for pid in active_pol_ids if pol_scores.get(pid, 0) > 0]
+                    if len(active_positive) == 1:
+                        newly_earned.append("confidence-supply")
+                        self._grant_achievement(session, team_id, "confidence-supply", scored_week,
+                                                {"politicianId": active_positive[0]})
+
+                # ── ethics-commissioner: ethics-type event attributed to MP ──
+                if not self._already_earned(session, team_id, "ethics-commissioner"):
+                    ethics_entry = next(
+                        (e for e in week_entries if "ethics" in (e.event or "").lower()), None
+                    )
+                    if ethics_entry:
+                        newly_earned.append("ethics-commissioner")
+                        self._grant_achievement(session, team_id, "ethics-commissioner", scored_week,
+                                                {"eventKey": ethics_entry.event})
+
+                # ── premiers-conference: 2+ provincial active MPs all score positive same week ──
+                if not self._already_earned(session, team_id, "premiers-conference"):
+                    provincial_active_pols = []
+                    for s in active_slots:
+                        pol = session.get(PoliticianModel, s.asset_id)
+                        if pol and pol.jurisdiction.lower() != "federal":
+                            provincial_active_pols.append(s.asset_id)
+                    prov_positive = [pid for pid in provincial_active_pols if pol_scores.get(pid, 0) > 0]
+                    if len(prov_positive) >= 2:
+                        newly_earned.append("premiers-conference")
+                        self._grant_achievement(session, team_id, "premiers-conference", scored_week,
+                                                {"provincialsScored": prov_positive})
+
+                # ── shadow-cabinet: 3+ opposition/parliamentary asset types active, finish top 3 ──
+                if not self._already_earned(session, team_id, "shadow-cabinet"):
+                    opp_types = {"opposition", "parliamentary"}
+                    opp_slots = []
+                    for s in active_slots:
+                        pol = session.get(PoliticianModel, s.asset_id)
+                        if pol and pol.asset_type in opp_types:
+                            opp_slots.append(s.asset_id)
+                    if len(opp_slots) >= 3:
+                        # Check if this team is in the top 3 for this week
+                        all_week_totals = {}
+                        for t in teams:
+                            total = session.scalar(
+                                select(func.coalesce(func.sum(LedgerEntryModel.points), 0)).where(
+                                    LedgerEntryModel.team_id == t.id,
+                                    LedgerEntryModel.week == scored_week,
+                                )
+                            ) or 0
+                            all_week_totals[t.id] = total
+                        sorted_teams = sorted(all_week_totals, key=lambda k: all_week_totals[k], reverse=True)
+                        rank = sorted_teams.index(team_id) + 1 if team_id in sorted_teams else 99
+                        if rank <= 3:
+                            newly_earned.append("shadow-cabinet")
+                            self._grant_achievement(session, team_id, "shadow-cabinet", scored_week,
+                                                    {"rank": rank, "oppSlots": opp_slots})
+
+                # ── first-blood: score any points for the first time ─────────
+                if not self._already_earned(session, team_id, "first-blood"):
+                    # Was score 0 before and now > 0?
+                    prev_total = all_time_total - week_total
+                    if prev_total <= 0 < all_time_total:
+                        newly_earned.append("first-blood")
+                        self._grant_achievement(session, team_id, "first-blood", scored_week, {})
+
+                # ── iron-streak-3 / iron-streak-5 ─────────────────────────────
+                stats = session.scalar(
+                    select(ManagerStatsModel).where(ManagerStatsModel.team_id == team_id)
+                )
+                if stats:
+                    if stats.positive_streak >= 3 and not self._already_earned(session, team_id, "iron-streak-3"):
+                        newly_earned.append("iron-streak-3")
+                        self._grant_achievement(session, team_id, "iron-streak-3", scored_week,
+                                                {"streak": stats.positive_streak})
+                    if stats.positive_streak >= 5 and not self._already_earned(session, team_id, "iron-streak-5"):
+                        newly_earned.append("iron-streak-5")
+                        self._grant_achievement(session, team_id, "iron-streak-5", scored_week,
+                                                {"streak": stats.positive_streak})
+
+                # ── comeback-kid: win a week after being last place previous week ──
+                if not self._already_earned(session, team_id, "comeback-kid") and scored_week > 1:
+                    prev_week = scored_week - 1
+                    prev_week_totals: dict[str, int] = {}
+                    curr_week_totals: dict[str, int] = {}
+                    for t in teams:
+                        prev_week_totals[t.id] = session.scalar(
+                            select(func.coalesce(func.sum(LedgerEntryModel.points), 0)).where(
+                                LedgerEntryModel.team_id == t.id,
+                                LedgerEntryModel.week == prev_week,
+                            )
+                        ) or 0
+                        curr_week_totals[t.id] = session.scalar(
+                            select(func.coalesce(func.sum(LedgerEntryModel.points), 0)).where(
+                                LedgerEntryModel.team_id == t.id,
+                                LedgerEntryModel.week == scored_week,
+                            )
+                        ) or 0
+                    prev_sorted = sorted(prev_week_totals, key=lambda k: prev_week_totals[k])
+                    curr_sorted = sorted(curr_week_totals, key=lambda k: curr_week_totals[k], reverse=True)
+                    was_last = bool(prev_sorted) and prev_sorted[0] == team_id
+                    is_first = bool(curr_sorted) and curr_sorted[0] == team_id
+                    if was_last and is_first:
+                        newly_earned.append("comeback-kid")
+                        self._grant_achievement(session, team_id, "comeback-kid", scored_week, {})
+
+                # ── full-house: all 4 active MPs score positive same week ─────
+                if not self._already_earned(session, team_id, "full-house"):
+                    active_scorers = [pid for pid in active_pol_ids if pol_scores.get(pid, 0) > 0]
+                    if len(active_pol_ids) == ACTIVE_LINEUP_SIZE and len(active_scorers) == ACTIVE_LINEUP_SIZE:
+                        newly_earned.append("full-house")
+                        self._grant_achievement(session, team_id, "full-house", scored_week, {})
+
+            session.commit()
+        return newly_earned
+
+    def get_cabinet_achievements(self, team_id: str) -> list[AchievementModel]:
+        with Session(self.engine) as session:
+            rows = list(session.scalars(
+                select(AchievementModel)
+                .where(AchievementModel.team_id == team_id)
+                .order_by(AchievementModel.earned_at.desc())
+            ))
+            # Detach from session by converting to plain dict-backed objects
+            session.expunge_all()
+            return rows
+
+    def get_cabinet_stats(self, team_id: str) -> ManagerStatsModel | None:
+        with Session(self.engine) as session:
+            stats = session.scalar(
+                select(ManagerStatsModel).where(ManagerStatsModel.team_id == team_id)
+            )
+            if stats:
+                session.expunge(stats)
+            return stats
+
+    def standings(self, league_id: str) -> list[tuple[TeamModel, int, ManagerStatsModel | None]]:
         with Session(self.engine) as session:
             teams = list(session.scalars(select(TeamModel).where(TeamModel.league_id == league_id)))
             totals: dict[str, int] = {team.id: 0 for team in teams}
             entries = list(session.scalars(select(LedgerEntryModel).where(LedgerEntryModel.league_id == league_id)))
             for entry in entries:
                 totals[entry.team_id] = totals.get(entry.team_id, 0) + entry.points
-            rows = [(team, totals.get(team.id, 0)) for team in teams]
+            stats_map: dict[str, ManagerStatsModel] = {
+                s.team_id: s for s in session.scalars(
+                    select(ManagerStatsModel).where(ManagerStatsModel.league_id == league_id)
+                )
+            }
+            rows = [(team, totals.get(team.id, 0), stats_map.get(team.id)) for team in teams]
             rows.sort(key=lambda row: row[1], reverse=True)
             return rows
 
@@ -991,9 +1334,17 @@ class PersistentStore:
             if slot is None:
                 raise ValueError(f"Portfolio seat {slot_name!r} not found in cabinet")
             slot.asset_id = mp_id
+            league_id = team.league_id
+            manager_user_id = team.manager_user_id
             session.commit()
             session.refresh(slot)
-            return slot
+        self._add_audit_direct(
+            league_id,
+            manager_user_id,
+            "team.mandate.updated",
+            {"teamId": team_id, "slotName": slot_name, "mpId": mp_id},
+        )
+        return slot
 
     def list_policy_objectives(self) -> list[PolicyObjectiveDef]:
         return POLICY_OBJECTIVES
@@ -1391,6 +1742,12 @@ class PersistentStore:
                 created_at=utcnow(),
             )
         )
+
+    def _add_audit_direct(self, league_id: str, actor_user_id: str, action: str, metadata: dict) -> None:
+        """Convenience wrapper that opens its own session for post-commit audit entries."""
+        with Session(self.engine) as session:
+            PersistentStore._add_audit(session, league_id, actor_user_id, action, metadata)
+            session.commit()
 
     @staticmethod
     def _ensure_actor_user(session: Session, actor_user_id: str) -> None:
