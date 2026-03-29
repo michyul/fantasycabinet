@@ -6,11 +6,13 @@ from pydantic import BaseModel
 from app.api.v1.schemas import (
     AuditLogOut,
     AttributionRunOut,
+    BenchSignalOut,
     CabinetCreate,
     CabinetOut,
     CabinetScopeCreate,
     CabinetScopeOut,
     CabinetScopeUpdate,
+    DailyDigestOut,
     DataSourceOut,
     DisputeCreate,
     DisputeOut,
@@ -318,6 +320,20 @@ def get_cabinet_policy_objectives(cabinet_id: str) -> PolicySelectionsOut:
 def set_cabinet_policy_objectives(cabinet_id: str, payload: PolicySelectionRequest) -> PolicySelectionsOut:
     saved = store.set_cabinet_policy_objectives(cabinet_id, payload.objective_ids)
     return PolicySelectionsOut(cabinet_id=cabinet_id, items=saved)
+
+
+@router.get("/cabinets/{cabinet_id}/bench-signals")
+def get_bench_signals(cabinet_id: str) -> dict[str, list[BenchSignalOut]]:
+    """Return daily attribution activity for each bench (monitoring) politician."""
+    signals = store.compute_bench_signals(cabinet_id)
+    return {"items": [BenchSignalOut(**s) for s in signals]}
+
+
+@router.get("/cabinets/{cabinet_id}/daily-digest")
+def get_daily_digest(cabinet_id: str) -> DailyDigestOut:
+    """Return today's top stories, active MP activity, and bench alerts in one call."""
+    digest = store.daily_digest(cabinet_id)
+    return DailyDigestOut(**digest)
 
 
 @router.post("/internal/events/ingest")

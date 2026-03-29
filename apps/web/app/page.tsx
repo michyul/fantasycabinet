@@ -1,7 +1,6 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 type CabinetScope = {
@@ -97,6 +96,44 @@ type ParliamentaryEvent = {
   url?: string;
 };
 
+type BenchSignal = {
+  politician_id: string;
+  politician_name: string;
+  article_count: number;
+  top_significance: number;
+  top_story_title: string | null;
+  top_story_id: string | null;
+};
+
+type DailyDigestTopStory = {
+  id: string;
+  canonical_title: string;
+  significance: number;
+  event_type: string;
+  jurisdiction: string;
+  article_count: number;
+};
+
+type DailyDigestMPActivity = {
+  politician_id: string;
+  politician_name: string;
+  article_count: number;
+};
+
+type DailyDigestBenchAlert = {
+  politician_id: string;
+  politician_name: string;
+  article_count: number;
+  in_news: boolean;
+};
+
+type DailyDigest = {
+  top_stories: DailyDigestTopStory[];
+  active_mps_in_news: DailyDigestMPActivity[];
+  bench_alerts: DailyDigestBenchAlert[];
+  total_articles_today: number;
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -168,6 +205,8 @@ export default function HomePage() {
   const [running, setRunning]                           = useState(false);
   const [error, setError]                               = useState("");
   const [notice, setNotice]                             = useState("");
+  const [dailyDigest, setDailyDigest]                   = useState<DailyDigest | null>(null);
+  const [benchSignals, setBenchSignals]                 = useState<BenchSignal[]>([]);
 
   const governingSeats  = portfolio.filter((s) => s.lineup_status === "active");
   const monitoringSeats = portfolio.filter((s) => s.lineup_status === "bench");
@@ -261,6 +300,22 @@ export default function HomePage() {
       const b = await readJson<{ items: ParliamentaryEvent[] }>(`${apiBase}/api/v1/events?limit=15`);
       setEvents(b.items);
     } catch { /**/ }
+  }
+
+  async function loadDailyDigest(cabinetId: string) {
+    if (!cabinetId) return;
+    try {
+      const b = await readJson<DailyDigest>(`${apiBase}/api/v1/cabinets/${cabinetId}/daily-digest`);
+      setDailyDigest(b);
+    } catch { /* non-fatal */ }
+  }
+
+  async function loadBenchSignals(cabinetId: string) {
+    if (!cabinetId) return;
+    try {
+      const b = await readJson<{ items: BenchSignal[] }>(`${apiBase}/api/v1/cabinets/${cabinetId}/bench-signals`);
+      setBenchSignals(b.items);
+    } catch { /* non-fatal */ }
   }
 
   // ── MP seat assignment ────────────────────────────────────────────────────
@@ -465,6 +520,8 @@ export default function HomePage() {
     if (selectedCabinetId) {
       void loadPortfolio(selectedCabinetId);
       void loadCabinetObjectives(selectedCabinetId);
+      void loadDailyDigest(selectedCabinetId);
+      void loadBenchSignals(selectedCabinetId);
       if (selectedScopeId) void loadLedger(selectedCabinetId, selectedScopeId);
     }
   }, [selectedCabinetId, selectedScopeId]);
@@ -518,7 +575,7 @@ export default function HomePage() {
                 <li><strong>MPs are the players.</strong> Real Canadian politicians — the PM, premiers, cabinet ministers, opposition leaders.</li>
                 <li><strong>Your cabinet is your team.</strong> 6 portfolio seats. You choose which MP fills each one.</li>
                 <li><strong>A cabinet scope is the competition.</strong> All managers inside a scope compete for weekly standings.</li>
-                <li><strong>The mandate is your weekly strategy.</strong> Exactly 4 of your 6 seats are "governing" — those score. The other 2 are "monitoring" reserves.</li>
+                <li><strong>The mandate is your weekly strategy.</strong> Exactly 4 of your 6 seats are &ldquo;governing&rdquo; — those score. The other 2 are &ldquo;monitoring&rdquo; reserves.</li>
                 <li><strong>Policy objectives add bonuses.</strong> Choose up to 2 objectives (economy, health, climate…) and earn bonus points when matching events occur.</li>
                 <li><strong>Parliamentary events drive scoring.</strong> Bills, confidence votes, scandals, policy milestones — scored automatically from real news each cycle.</li>
                 <li><strong>Party affinity and role type matter.</strong> An executive MP scores more on executive events. A party in the headlines gets a bonus.</li>
@@ -571,6 +628,7 @@ export default function HomePage() {
                   editingSeatSlot={editingSeatSlot}
                   setEditingSeatSlot={setEditingSeatSlot}
                   onAssign={assignMP}
+                  benchSignals={benchSignals}
                 />
               )}
               {portfolio.length === 0 && selectedCabinetId && <p className="muted">Loading portfolio…</p>}
@@ -648,6 +706,81 @@ export default function HomePage() {
         </section>
       )}
 
+      {/* ── Today in Canadian Politics ── */}
+      {selectedCabinetId && (
+        <section className="card">
+          <h2>Today in Canadian Politics</h2>
+          {dailyDigest ? (
+            <>
+              <p className="muted">
+                {dailyDigest.total_articles_today > 0
+                  ? `${dailyDigest.total_articles_today} article${dailyDigest.total_articles_today !== 1 ? "s" : ""} ingested today`
+                  : "Quiet day in Ottawa — no articles yet today"}
+              </p>
+
+              {dailyDigest.top_stories.length > 0 && (
+                <>
+                  <h3>Top headlines</h3>
+                  <ul className="events">
+                    {dailyDigest.top_stories.map((story) => (
+                      <li key={story.id}>
+                        <div className="event-title">{story.canonical_title}</div>
+                        <div className="muted">
+                          <span className="event-tag">{story.event_type}</span>
+                          {story.jurisdiction}
+                          <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", background: "#1a4a2e", color: "#7cf0c0", borderRadius: "4px", padding: "1px 5px", fontWeight: 600 }}>
+                            ★ {story.significance.toFixed(1)}
+                          </span>
+                          {story.article_count > 1 && (
+                            <span style={{ marginLeft: "0.4rem", fontSize: "0.75rem", color: "#b9d3ff" }}>
+                              {story.article_count} articles
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {dailyDigest.active_mps_in_news.length > 0 && (
+                <>
+                  <h3>Your governing MPs trending</h3>
+                  <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                    {dailyDigest.active_mps_in_news.map((mp) => (
+                      <span key={mp.politician_id} style={{ background: "rgba(124, 240, 192, 0.15)", border: "1px solid rgba(124, 240, 192, 0.4)", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.82rem" }}>
+                        🟢 {mp.politician_name}
+                        <span style={{ marginLeft: "0.35rem", opacity: 0.75 }}>{mp.article_count} art.</span>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {dailyDigest.bench_alerts.length > 0 && (
+                <>
+                  <h3>Bench alerts</h3>
+                  <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                    {dailyDigest.bench_alerts.map((mp) => (
+                      <span key={mp.politician_id} style={{ background: "rgba(255, 166, 0, 0.12)", border: "1px solid rgba(255, 166, 0, 0.4)", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.82rem" }}>
+                        🟡 {mp.politician_name} is in the news!
+                        <span style={{ marginLeft: "0.35rem", opacity: 0.75 }}>{mp.article_count} art.</span>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {dailyDigest.top_stories.length === 0 && dailyDigest.active_mps_in_news.length === 0 && dailyDigest.bench_alerts.length === 0 && (
+                <p className="muted" style={{ marginTop: "0.5rem" }}>No activity to show yet — check back once today&apos;s events are ingested.</p>
+              )}
+            </>
+          ) : (
+            <p className="muted">Loading today&apos;s digest…</p>
+          )}
+        </section>
+      )}
+
       {/* ── Cabinet standings ── */}
       <section className="card">
         <h2>Cabinet standings</h2>
@@ -695,6 +828,7 @@ export default function HomePage() {
               editingSeatSlot={editingSeatSlot}
               setEditingSeatSlot={setEditingSeatSlot}
               onAssign={assignMP}
+              benchSignals={benchSignals}
             />
           )
           : <p className="muted">No portfolio loaded.</p>
@@ -828,14 +962,19 @@ function jurisdictionHintForSlot(slot: string): string | null {
 }
 
 function MPPicker({
-  portfolio, allMPs, editingSeatSlot, setEditingSeatSlot, onAssign,
+  portfolio, allMPs, editingSeatSlot, setEditingSeatSlot, onAssign, benchSignals = [],
 }: {
   portfolio: PortfolioSeat[];
   allMPs: MP[];
   editingSeatSlot: string | null;
   setEditingSeatSlot: (slot: string | null) => void;
   onAssign: (slot: string, mpId: string) => Promise<void>;
+  benchSignals?: BenchSignal[];
 }) {
+  const signalByPoliticianId = useMemo(
+    () => Object.fromEntries(benchSignals.map((s) => [s.politician_id, s])),
+    [benchSignals],
+  );
   return (
     <div style={{ marginTop: "1rem" }}>
       <table>
@@ -846,6 +985,7 @@ function MPPicker({
           {portfolio.map((seat) => {
             const editing = editingSeatSlot === seat.slot;
             const hint    = jurisdictionHintForSlot(seat.slot);
+            const signal  = seat.lineup_status === "bench" ? signalByPoliticianId[seat.asset_id] : undefined;
             // Filter out pending/retired for assignment; keep ineligible visible (with badge)
             const options = (hint
               ? allMPs.filter((m) => m.jurisdiction.toLowerCase() === hint)
@@ -855,7 +995,17 @@ function MPPicker({
               <Fragment key={seat.roster_slot_id}>
                 <tr>
                   <td>{seat.slot_label}</td>
-                  <td>{seat.asset_name}</td>
+                  <td>
+                    {seat.asset_name}
+                    {signal && signal.article_count > 0 && (
+                      <span
+                        title={signal.top_story_title ?? "Active in news today"}
+                        style={{ marginLeft: "0.4rem", fontSize: "0.72rem", background: "rgba(255,166,0,0.2)", color: "#ffa600", border: "1px solid rgba(255,166,0,0.4)", borderRadius: "4px", padding: "1px 5px", fontWeight: 600, cursor: "default" }}
+                      >
+                        📰 {signal.article_count}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{seat.asset_type}</td>
                   <td><PartyBadge party={seat.party} /></td>
                   <td>{seat.jurisdiction}</td>

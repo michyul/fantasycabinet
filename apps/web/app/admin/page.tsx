@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -828,7 +829,7 @@ export default function AdminPage() {
       <main>
         <h1>Admin Centre</h1>
         <p className="error">You need the commissioner role to access this page.</p>
-        <a href="/">← Back to game</a>
+        <Link href="/">← Back to game</Link>
       </main>
     );
   }
@@ -861,7 +862,7 @@ export default function AdminPage() {
             </p>
           )}
         </div>
-        <a href="/" style={{ fontSize: "0.875rem" }}>← Back to game</a>
+        <Link href="/" style={{ fontSize: "0.875rem" }}>← Back to game</Link>
       </div>
 
       {/* Bootstrap at top — always visible */}
