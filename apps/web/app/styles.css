@@ -1,0 +1,225 @@
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: radial-gradient(circle at top, #1a2952, #0b1220 55%);
+  color: #e7ebff;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 3rem 1.25rem;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+select,
+input,
+button {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e7ebff;
+  padding: 0.45rem 0.6rem;
+}
+
+input {
+  min-width: 240px;
+}
+
+button {
+  cursor: pointer;
+}
+
+table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.muted {
+  opacity: 0.8;
+}
+
+.error {
+  color: #ff9a9a;
+  margin-top: 0.75rem;
+}
+
+a {
+  color: #b9d3ff;
+}
+
+.events {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.events li {
+  margin: 0.6rem 0;
+}
+
+.event-title {
+  font-weight: 500;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+h3 {
+  margin: 0.2rem 0 0.6rem;
+}
+
+.onboarding {
+  border-color: rgba(138, 180, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.2) inset;
+}
+
+.onboarding-steps {
+  margin: 1rem 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.onboarding-steps li button {
+  text-align: left;
+  width: 100%;
+}
+
+.onboarding-steps li.active-step button {
+  border-color: rgba(168, 208, 255, 0.9);
+  background: rgba(107, 164, 255, 0.2);
+}
+
+.onboarding-panel {
+  margin-top: 0.9rem;
+}
+
+.onboarding-panel ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+}
+
+.onboarding-nav {
+  margin-top: 1rem;
+}
+
+.onboarding-create-row {
+  margin-top: 0.6rem;
+}
+
+/* ── Party badge ── */
+.party-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+/* ── Event type tag ── */
+.event-tag {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(138, 180, 255, 0.18);
+  color: #b9d3ff;
+  margin-right: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── MP picker inline row ── */
+.mp-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.25rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
+
+.mp-picker-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Policy objective cards ── */
+.objective-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.objective-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.objective-card:hover {
+  border-color: rgba(138, 180, 255, 0.5);
+  background: rgba(138, 180, 255, 0.08);
+}
+
+.objective-card.objective-active {
+  border-color: rgba(138, 180, 255, 0.9);
+  background: rgba(107, 164, 255, 0.18);
+  box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.4) inset;
+}
+
+.objective-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+}
+
+.objective-desc {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  margin-bottom: 0.4rem;
+}
+
+.objective-bonus {
+  font-size: 0.8rem;
+  color: #7cf0c0;
+  font-weight: 600;
+}
+

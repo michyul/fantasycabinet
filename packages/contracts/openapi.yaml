@@ -1,0 +1,242 @@
+openapi: 3.0.3
+info:
+  title: FantasyCabinet API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+paths:
+  /auth/me:
+    get:
+      summary: Get current user profile
+      responses:
+        '200':
+          description: OK
+  /users:
+    get:
+      summary: List users
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Create user
+      responses:
+        '201':
+          description: Created
+  /users/{userId}:
+    get:
+      summary: Get user by id
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not found
+    patch:
+      summary: Update user
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not found
+  /assets:
+    get:
+      summary: List available political assets
+      responses:
+        '200':
+          description: OK
+  /events:
+    get:
+      summary: List ingested political events
+      responses:
+        '200':
+          description: OK
+  /leagues:
+    get:
+      summary: List leagues
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Create a league
+      responses:
+        '201':
+          description: Created
+  /leagues/{leagueId}:
+    get:
+      summary: Get league details
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not found
+  /leagues/{leagueId}/teams:
+    get:
+      summary: List teams in a league
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Create team in a league
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Created
+  /leagues/{leagueId}/standings:
+    get:
+      summary: Get standings
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /teams/{teamId}/roster:
+    get:
+      summary: Get team roster
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /teams/{teamId}/lineup:
+    patch:
+      summary: Update team mandate governing/monitoring slots (legacy alias)
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Invalid mandate configuration
+        '404':
+          description: Team not found
+  /teams/{teamId}/mandate:
+    patch:
+      summary: Update team mandate governing/monitoring slots
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Invalid mandate configuration
+        '404':
+          description: Team not found
+  /teams/{teamId}/ledger:
+    get:
+      summary: Get team score ledger
+      parameters:
+        - in: path
+          name: teamId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: league_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /internal/scoring/run:
+    post:
+      summary: Run a scoring cycle for a league
+      responses:
+        '200':
+          description: OK
+  /internal/events/ingest:
+    post:
+      summary: Ingest normalized real-world political events
+      responses:
+        '200':
+          description: OK
+  /leagues/{leagueId}/disputes:
+    post:
+      summary: Create scoring dispute
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Created
+  /leagues/{leagueId}/disputes/{disputeId}/resolve:
+    post:
+      summary: Resolve dispute
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: disputeId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /leagues/{leagueId}/audit-log:
+    get:
+      summary: Get audit log
+      parameters:
+        - in: path
+          name: leagueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK

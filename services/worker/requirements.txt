@@ -1,0 +1,4 @@
+redis==6.0.0
+httpx==0.28.1
+tenacity==9.1.2
+feedparser==6.0.11
