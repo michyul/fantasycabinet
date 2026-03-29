@@ -51,6 +51,7 @@ from app.api.v1.schemas import (
     UserCreate,
     UserProfile,
     UserUpdate,
+    WeekThemeOut,
 )
 from app.api.v1.persistent_store import POLICY_OBJECTIVES, PORTFOLIO_SEAT_LABELS, roles_for_user, store
 
@@ -253,6 +254,28 @@ def cabinet_scope_standings(scope_id: str) -> StandingsOut:
 @router.get("/cabinet-scopes/{scope_id}/audit-log")
 def cabinet_scope_audit_log(scope_id: str) -> dict[str, list[AuditLogOut]]:
     return league_audit_log(scope_id)
+
+
+@router.get("/cabinet-scopes/{scope_id}/week-theme")
+def get_week_theme(scope_id: str) -> WeekThemeOut | None:
+    """Return the current week's modifier/theme for this cabinet scope, or null if none is active."""
+    league = _assert_league_exists(scope_id)
+    week = league.current_week
+    cfg = store.get_system_config()
+    week_modifiers = cfg.get("week_modifiers")
+    if not isinstance(week_modifiers, dict):
+        return None
+    mod = week_modifiers.get(str(week))
+    if not mod:
+        return None
+    return WeekThemeOut(
+        week=week,
+        label=mod.get("label", ""),
+        description=mod.get("description", ""),
+        multipliers=mod.get("multipliers", {}),
+        asset_multipliers=mod.get("asset_multipliers", {}),
+        event_type_whitelist=mod.get("event_type_whitelist"),
+    )
 
 
 @router.post("/cabinet-scopes/{scope_id}/disputes", status_code=status.HTTP_201_CREATED)

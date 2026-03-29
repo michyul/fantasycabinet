@@ -134,6 +134,15 @@ type DailyDigest = {
   total_articles_today: number;
 };
 
+type WeekTheme = {
+  week: number;
+  label: string;
+  description: string;
+  multipliers: Record<string, number>;
+  asset_multipliers: Record<string, number>;
+  event_type_whitelist: string[] | null;
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -207,6 +216,7 @@ export default function HomePage() {
   const [notice, setNotice]                             = useState("");
   const [dailyDigest, setDailyDigest]                   = useState<DailyDigest | null>(null);
   const [benchSignals, setBenchSignals]                 = useState<BenchSignal[]>([]);
+  const [weekTheme, setWeekTheme]                       = useState<WeekTheme | null>(null);
 
   const governingSeats  = portfolio.filter((s) => s.lineup_status === "active");
   const monitoringSeats = portfolio.filter((s) => s.lineup_status === "bench");
@@ -316,6 +326,14 @@ export default function HomePage() {
       const b = await readJson<{ items: BenchSignal[] }>(`${apiBase}/api/v1/cabinets/${cabinetId}/bench-signals`);
       setBenchSignals(b.items);
     } catch { /* non-fatal */ }
+  }
+
+  async function loadWeekTheme(scopeId: string) {
+    if (!scopeId) { setWeekTheme(null); return; }
+    try {
+      const b = await readJson<WeekTheme | null>(`${apiBase}/api/v1/cabinet-scopes/${scopeId}/week-theme`);
+      setWeekTheme(b);
+    } catch { setWeekTheme(null); }
   }
 
   // ── MP seat assignment ────────────────────────────────────────────────────
@@ -513,6 +531,7 @@ export default function HomePage() {
     if (selectedScopeId) {
       void loadStandings(selectedScopeId);
       void loadCabinets(selectedScopeId, profile?.id);
+      void loadWeekTheme(selectedScopeId);
     }
   }, [selectedScopeId, profile?.id]);
 
@@ -541,6 +560,53 @@ export default function HomePage() {
         )}
       </div>
       <p>Build a cabinet of Canadian MPs, set your governing mandate, and score from real parliamentary events.</p>
+
+      {/* ── Week Theme Banner ── */}
+      {weekTheme && (
+        <section style={{
+          background: "linear-gradient(135deg, rgba(24,48,80,0.95), rgba(16,36,64,0.98))",
+          border: "1px solid rgba(138,180,255,0.35)",
+          borderRadius: "10px",
+          padding: "0.9rem 1.25rem",
+          marginBottom: "1rem",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: "0.75rem",
+        }}>
+          <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>
+            {weekTheme.label.toLowerCase().includes("budget") ? "🏛️" :
+             weekTheme.label.toLowerCase().includes("opposition") ? "⚔️" :
+             weekTheme.label.toLowerCase().includes("prorogation") ? "🔔" : "📅"}
+          </span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "1rem", color: "#e0eaff", marginBottom: "0.2rem" }}>
+              Week {weekTheme.week}: {weekTheme.label}
+            </div>
+            <div style={{ fontSize: "0.875rem", color: "rgba(185,211,255,0.85)" }}>
+              {weekTheme.description}
+            </div>
+            {(Object.keys(weekTheme.multipliers).length > 0 || Object.keys(weekTheme.asset_multipliers).length > 0) && (
+              <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                {Object.entries(weekTheme.multipliers).map(([type, mult]) => (
+                  <span key={type} style={{ background: "rgba(124,240,192,0.15)", border: "1px solid rgba(124,240,192,0.35)", borderRadius: "4px", padding: "1px 7px", fontSize: "0.78rem", color: "#7cf0c0" }}>
+                    {type} ×{mult}
+                  </span>
+                ))}
+                {Object.entries(weekTheme.asset_multipliers).map(([type, mult]) => (
+                  <span key={type} style={{ background: "rgba(255,200,100,0.12)", border: "1px solid rgba(255,200,100,0.35)", borderRadius: "4px", padding: "1px 7px", fontSize: "0.78rem", color: "#ffd97d" }}>
+                    {type} ×{mult}
+                  </span>
+                ))}
+                {weekTheme.event_type_whitelist && (
+                  <span style={{ background: "rgba(255,120,120,0.12)", border: "1px solid rgba(255,120,120,0.35)", borderRadius: "4px", padding: "1px 7px", fontSize: "0.78rem", color: "#ff9a9a" }}>
+                    only: {weekTheme.event_type_whitelist.join(", ")}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Replay onboarding ── */}
       {onboardingDone && (
