@@ -205,6 +205,12 @@ h3 {
   box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.4) inset;
 }
 
+.objective-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.35rem;
+  line-height: 1;
+}
+
 .objective-name {
   font-weight: 700;
   font-size: 0.95rem;
@@ -221,5 +227,487 @@ h3 {
   font-size: 0.8rem;
   color: #7cf0c0;
   font-weight: 600;
+}
+
+/* ── App header ── */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(11, 18, 32, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.app-header-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0.65rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.brand-maple {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.brand-name {
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #e0eaff;
+}
+
+.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 20px;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.82rem;
+  color: #c8d8f8;
+}
+
+.profile-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(138, 180, 255, 0.3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.admin-link {
+  font-size: 0.82rem;
+  color: #b9d3ff;
+  text-decoration: none;
+  opacity: 0.85;
+}
+
+.admin-link:hover {
+  opacity: 1;
+}
+
+/* ── MP profile card grid ── */
+.mp-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.mp-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 14px;
+  padding: 0.9rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.mp-card:hover {
+  border-color: rgba(138, 180, 255, 0.38);
+  box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.12) inset;
+}
+
+.mp-card--bench {
+  opacity: 0.68;
+}
+
+.mp-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1rem;
+  color: #fff;
+  flex-shrink: 0;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.mp-card-name {
+  font-weight: 700;
+  font-size: 0.91rem;
+  line-height: 1.2;
+  margin-bottom: 0.12rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mp-card-role {
+  font-size: 0.77rem;
+  color: rgba(185, 211, 255, 0.62);
+  margin-bottom: 0.38rem;
+}
+
+.mp-card-meta {
+  display: flex;
+  gap: 0.38rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mp-card-footer {
+  margin-top: 0.72rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mp-seat-label {
+  font-size: 0.72rem;
+  color: rgba(185, 211, 255, 0.48);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trending-hot {
+  background: rgba(255, 140, 50, 0.17);
+  border: 1px solid rgba(255, 140, 50, 0.42);
+  color: #ffa060;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+/* ── Leaderboard ── */
+.leaderboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 1rem;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  transition: border-color 0.15s;
+}
+
+.leaderboard-row:hover {
+  border-color: rgba(138, 180, 255, 0.28);
+}
+
+.leaderboard-row--mine {
+  border-color: rgba(138, 180, 255, 0.38);
+  background: rgba(138, 180, 255, 0.055);
+}
+
+.rank-medal {
+  font-size: 1.1rem;
+  width: 26px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.rank-num {
+  font-size: 0.83rem;
+  color: rgba(185, 211, 255, 0.45);
+  width: 26px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.lb-cabinet-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lb-points {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #7cf0c0;
+  min-width: 56px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.score-bar-track {
+  width: 90px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.score-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a7fff, #7cf0c0);
+  border-radius: 3px;
+  transition: width 0.45s ease;
+}
+
+/* ── Mandate visual slots ── */
+.mandate-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.mandate-slot {
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 0.85rem 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, opacity 0.15s;
+  user-select: none;
+}
+
+.mandate-slot--active {
+  border-color: rgba(124, 240, 192, 0.52);
+  background: rgba(124, 240, 192, 0.055);
+  box-shadow: 0 0 16px rgba(124, 240, 192, 0.1);
+}
+
+.mandate-slot--active:hover {
+  border-color: rgba(124, 240, 192, 0.78);
+}
+
+.mandate-slot--bench {
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.62;
+}
+
+.mandate-slot--bench:hover {
+  opacity: 0.9;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.mandate-slot-status {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 0.38rem;
+}
+
+.mandate-slot-status--active {
+  color: #7cf0c0;
+}
+
+.mandate-slot-status--bench {
+  color: rgba(185, 211, 255, 0.36);
+}
+
+.mandate-slot-name {
+  font-weight: 700;
+  font-size: 0.87rem;
+  line-height: 1.25;
+  margin-bottom: 0.22rem;
+}
+
+.mandate-slot-label {
+  font-size: 0.74rem;
+  color: rgba(185, 211, 255, 0.52);
+  margin-bottom: 0.4rem;
+}
+
+/* ── Stat chips ── */
+.stats-bar {
+  display: flex;
+  gap: 0.65rem;
+  margin: 0.75rem 0 0.25rem;
+  flex-wrap: wrap;
+}
+
+.stat-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 10px;
+  padding: 0.45rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 68px;
+}
+
+.stat-chip-value {
+  font-size: 1.3rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.stat-chip-label {
+  font-size: 0.67rem;
+  color: rgba(185, 211, 255, 0.52);
+  margin-top: 0.18rem;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.stat-chip--green .stat-chip-value {
+  color: #7cf0c0;
+}
+
+.stat-chip--blue .stat-chip-value {
+  color: #6ab4ff;
+}
+
+.stat-chip--yellow .stat-chip-value {
+  color: #ffd97d;
+}
+
+/* ── Daily digest story cards ── */
+.story-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  padding: 0.72rem 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.story-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  margin-bottom: 0.3rem;
+}
+
+.story-sig-bar {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  margin-top: 0.42rem;
+  overflow: hidden;
+}
+
+.story-sig-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #4a7fff, #7cf0c0);
+}
+
+/* ── Score ledger ── */
+.ledger-week-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.38rem 0.2rem;
+  margin-top: 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.ledger-week-label {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: rgba(185, 211, 255, 0.62);
+}
+
+.ledger-week-total {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.ledger-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.42rem 0.2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  font-size: 0.85rem;
+}
+
+.ledger-event {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-points {
+  font-weight: 700;
+  min-width: 50px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.point-pos {
+  color: #7cf0c0;
+}
+
+.point-neg {
+  color: #ff9a9a;
+}
+
+/* ── Bench signal pills ── */
+.bench-signal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  background: rgba(255, 166, 0, 0.1);
+  border: 1px solid rgba(255, 166, 0, 0.32);
+  border-radius: 8px;
+  padding: 0.32rem 0.6rem;
+  font-size: 0.81rem;
+}
+
+.bench-signal-name {
+  font-weight: 600;
+}
+
+/* ── Active MP trending pill ── */
+.active-mp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  background: rgba(124, 240, 192, 0.1);
+  border: 1px solid rgba(124, 240, 192, 0.32);
+  border-radius: 8px;
+  padding: 0.32rem 0.6rem;
+  font-size: 0.81rem;
+}
+
+.active-mp-pill-name {
+  font-weight: 600;
+}
+
+/* ── Section head ── */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.section-head h2 {
+  margin: 0;
 }
 

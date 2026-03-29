@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 type CabinetScope = {
@@ -148,6 +148,32 @@ type WeekTheme = {
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const ONBOARDING_KEY = "fc_onboarding_v4";
 
+const RANK_MEDALS = ["🥇", "🥈", "🥉"];
+
+const OBJECTIVE_ICONS: Record<string, string> = {
+  economy: "💰", budget: "💰", fiscal: "💰",
+  health: "🏥", healthcare: "🏥",
+  climate: "🌿", environment: "🌿", green: "🌿",
+  justice: "⚖️", law: "⚖️", legal: "⚖️",
+  housing: "🏠",
+  transit: "🚆", transport: "🚆", infrastructure: "🏗️",
+  defense: "🛡️", security: "🛡️",
+  foreign: "🌐", international: "🌐",
+  indigenous: "🪶", reconciliation: "🪶",
+  education: "📚",
+  energy: "⚡",
+  trade: "🤝",
+  agriculture: "🌾",
+};
+
+function getObjectiveIcon(name: string): string {
+  const lower = name.toLowerCase();
+  for (const [key, icon] of Object.entries(OBJECTIVE_ICONS)) {
+    if (lower.includes(key)) return icon;
+  }
+  return "📋";
+}
+
 const PARTY_COLOURS: Record<string, string> = {
   Liberal:      "#c0392b",
   Conservative: "#2980b9",
@@ -224,6 +250,24 @@ export default function HomePage() {
   const myCabinets      = useMemo(
     () => profile ? cabinets.filter((c) => c.manager_user_id === profile.id) : cabinets,
     [cabinets, profile],
+  );
+  const myCabinetIds    = useMemo(() => new Set(myCabinets.map((c) => c.id)), [myCabinets]);
+  const maxStandingsPts = standings ? Math.max(...standings.items.map((r) => r.total_points), 1) : 1;
+  const mandateValid    = governingSeats.length === 4 &&
+    governingSeats.some((s) => s.jurisdiction.toLowerCase() === "federal") &&
+    governingSeats.some((s) => s.jurisdiction.toLowerCase() !== "federal");
+  const ledgerByWeek    = useMemo(() => {
+    const groups = new Map<number, LedgerEntry[]>();
+    for (const entry of ledger) {
+      const arr = groups.get(entry.week) ?? [];
+      arr.push(entry);
+      groups.set(entry.week, arr);
+    }
+    return [...groups.entries()].sort((a, b) => b[0] - a[0]);
+  }, [ledger]);
+  const weekTotals      = useMemo(
+    () => Object.fromEntries(ledgerByWeek.map(([week, entries]) => [week, entries.reduce((sum, e) => sum + e.points, 0)])),
+    [ledgerByWeek],
   );
 
   // ── loaders ───────────────────────────────────────────────────────────────
@@ -545,21 +589,33 @@ export default function HomePage() {
     }
   }, [selectedCabinetId, selectedScopeId]);
 
-  if (!hydrated) return <main><h1>FantasyCabinet</h1><p className="muted">Loading…</p></main>;
+  if (!hydrated) return <main><h1>🍁 FantasyCabinet</h1><p className="muted">Loading…</p></main>;
 
   // ── render ────────────────────────────────────────────────────────────────
 
   const isCommissioner = profile?.roles.includes("commissioner") || profile?.roles.includes("admin");
 
   return (
-    <main>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "0.25rem" }}>
-        <h1 style={{ margin: 0 }}>FantasyCabinet</h1>
-        {isCommissioner && (
-          <a href="/admin" style={{ fontSize: "0.875rem", opacity: 0.85 }}>⚙ Admin centre</a>
-        )}
-      </div>
-      <p>Build a cabinet of Canadian MPs, set your governing mandate, and score from real parliamentary events.</p>
+    <>
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div className="brand">
+            <span className="brand-maple" aria-hidden="true">🍁</span>
+            <span className="brand-name">FantasyCabinet</span>
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            {profile && (
+              <div className="profile-chip">
+                <span className="profile-avatar" aria-label={profile.display_name}>{profile.display_name[0]?.toUpperCase()}</span>
+                <span>{profile.display_name}</span>
+              </div>
+            )}
+            {isCommissioner && <a href="/admin" className="admin-link">⚙ Admin</a>}
+          </div>
+        </div>
+      </header>
+      <main>
+      <p className="muted" style={{ marginBottom: "1.25rem" }}>Build a cabinet of Canadian MPs, set your governing mandate, and score from real parliamentary events.</p>
 
       {/* ── Week Theme Banner ── */}
       {weekTheme && (
@@ -787,36 +843,35 @@ export default function HomePage() {
               {dailyDigest.top_stories.length > 0 && (
                 <>
                   <h3>Top headlines</h3>
-                  <ul className="events">
-                    {dailyDigest.top_stories.map((story) => (
-                      <li key={story.id}>
-                        <div className="event-title">{story.canonical_title}</div>
-                        <div className="muted">
-                          <span className="event-tag">{story.event_type}</span>
-                          {story.jurisdiction}
-                          <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", background: "#1a4a2e", color: "#7cf0c0", borderRadius: "4px", padding: "1px 5px", fontWeight: 600 }}>
-                            ★ {story.significance.toFixed(1)}
-                          </span>
-                          {story.article_count > 1 && (
-                            <span style={{ marginLeft: "0.4rem", fontSize: "0.75rem", color: "#b9d3ff" }}>
-                              {story.article_count} articles
-                            </span>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+                  {dailyDigest.top_stories.map((story) => (
+                    <div key={story.id} className="story-card">
+                      <div className="story-title">{story.canonical_title}</div>
+                      <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
+                        <span className="event-tag">{story.event_type}</span>
+                        <span style={{ fontSize: "0.78rem", color: "rgba(185,211,255,0.6)" }}>{story.jurisdiction}</span>
+                        {story.article_count > 1 && (
+                          <span style={{ fontSize: "0.75rem", color: "#b9d3ff" }}>{story.article_count} articles</span>
+                        )}
+                        <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "#7cf0c0", fontWeight: 600 }}>
+                          ★ {story.significance.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="story-sig-bar">
+                        <div className="story-sig-fill" style={{ width: `${(story.significance / 10) * 100}%` }} />
+                      </div>
+                    </div>
+                  ))}
                 </>
               )}
 
               {dailyDigest.active_mps_in_news.length > 0 && (
                 <>
                   <h3>Your governing MPs trending</h3>
-                  <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
                     {dailyDigest.active_mps_in_news.map((mp) => (
-                      <span key={mp.politician_id} style={{ background: "rgba(124, 240, 192, 0.15)", border: "1px solid rgba(124, 240, 192, 0.4)", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.82rem" }}>
-                        🟢 {mp.politician_name}
-                        <span style={{ marginLeft: "0.35rem", opacity: 0.75 }}>{mp.article_count} art.</span>
+                      <span key={mp.politician_id} className="active-mp-pill">
+                        🟢 <span className="active-mp-pill-name">{mp.politician_name}</span>
+                        <span style={{ opacity: 0.7, fontSize: "0.78rem" }}>{mp.article_count} art.</span>
                       </span>
                     ))}
                   </div>
@@ -826,11 +881,11 @@ export default function HomePage() {
               {dailyDigest.bench_alerts.length > 0 && (
                 <>
                   <h3>Bench alerts</h3>
-                  <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
                     {dailyDigest.bench_alerts.map((mp) => (
-                      <span key={mp.politician_id} style={{ background: "rgba(255, 166, 0, 0.12)", border: "1px solid rgba(255, 166, 0, 0.4)", borderRadius: "8px", padding: "0.3rem 0.6rem", fontSize: "0.82rem" }}>
-                        🟡 {mp.politician_name} is in the news!
-                        <span style={{ marginLeft: "0.35rem", opacity: 0.75 }}>{mp.article_count} art.</span>
+                      <span key={mp.politician_id} className="bench-signal-pill">
+                        🟡 <span className="bench-signal-name">{mp.politician_name}</span>
+                        <span style={{ opacity: 0.7, fontSize: "0.78rem" }}>{mp.article_count} art.</span>
                       </span>
                     ))}
                   </div>
@@ -849,30 +904,34 @@ export default function HomePage() {
 
       {/* ── Cabinet standings ── */}
       <section className="card">
-        <h2>Cabinet standings</h2>
-        <div className="row">
-          <label htmlFor="dash-scope">Scope</label>
-          <select id="dash-scope" value={selectedScopeId} onChange={(e) => setSelectedScopeId(e.target.value)} disabled={loading || !scopes.length}>
-            {scopes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <button type="button" onClick={runScoring} disabled={!selectedScopeId || running}>
-            {running ? "Scoring…" : "Run week scoring"}
-          </button>
+        <div className="section-head">
+          <h2>Cabinet standings</h2>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <select id="dash-scope" value={selectedScopeId} onChange={(e) => setSelectedScopeId(e.target.value)} disabled={loading || !scopes.length}>
+              {scopes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <button type="button" onClick={runScoring} disabled={!selectedScopeId || running}>
+              {running ? "Scoring…" : "⚡ Run scoring"}
+            </button>
+          </div>
         </div>
-        {selectedScope && <p className="muted">Format: {selectedScope.format} · Week: {selectedScope.current_week}</p>}
+        {selectedScope && <p className="muted" style={{ marginTop: "0.25rem" }}>Format: {selectedScope.format} · Week {selectedScope.current_week}</p>}
         {standings && standings.items.length > 0 ? (
-          <table>
-            <thead><tr><th>Rank</th><th>Cabinet</th><th>Points</th></tr></thead>
-            <tbody>
-              {standings.items.map((row) => (
-                <tr key={row.cabinet_id}>
-                  <td>{row.rank}</td>
-                  <td>{row.cabinet_name}</td>
-                  <td>{row.total_points}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="leaderboard">
+            {standings.items.map((row) => (
+              <div key={row.cabinet_id} className={`leaderboard-row${myCabinetIds.has(row.cabinet_id) ? " leaderboard-row--mine" : ""}`}>
+                {row.rank <= 3
+                  ? <span className="rank-medal" aria-label={`Rank ${row.rank}`}>{RANK_MEDALS[row.rank - 1]}</span>
+                  : <span className="rank-num" aria-label={`Rank ${row.rank}`}>{row.rank}</span>
+                }
+                <span className="lb-cabinet-name">{row.cabinet_name}</span>
+                <div className="score-bar-track">
+                  <div className="score-bar-fill" style={{ width: `${(row.total_points / maxStandingsPts) * 100}%` }} />
+                </div>
+                <span className="lb-points">+{row.total_points}</span>
+              </div>
+            ))}
+          </div>
         ) : <p className="muted">No standings yet — run a scoring cycle to begin.</p>}
         {error && <p className="error">{error}</p>}
       </section>
@@ -904,12 +963,27 @@ export default function HomePage() {
 
       {/* ── Mandate configuration ── */}
       <section className="card">
-        <h2>Mandate configuration</h2>
-        <p className="muted">4 governing seats · ≥1 federal · ≥1 provincial · only governing seats score.</p>
-        <p className="muted">Governing: {governingSeats.length} · Monitoring: {monitoringSeats.length}</p>
-        <div className="row">
-          <button type="button" onClick={saveMandate} disabled={!selectedCabinetId || savingMandate}>{savingMandate ? "Saving…" : "Save mandate"}</button>
-          <button type="button" onClick={autoBalance} disabled={!portfolio.length || savingMandate}>Auto-balance</button>
+        <div className="section-head">
+          <h2>Mandate configuration</h2>
+          <div style={{ display: "flex", gap: "0.4rem" }}>
+            <button type="button" onClick={autoBalance} disabled={!portfolio.length || savingMandate}>Auto-balance</button>
+            <button type="button" onClick={saveMandate} disabled={!selectedCabinetId || savingMandate}>{savingMandate ? "Saving…" : "Save mandate"}</button>
+          </div>
+        </div>
+        <p className="muted" style={{ marginTop: "0.25rem" }}>Click a seat to toggle governing ↔ bench. Need exactly 4 governing, ≥1 federal, ≥1 provincial.</p>
+        <div className="stats-bar">
+          <div className="stat-chip stat-chip--green">
+            <span className="stat-chip-value">{governingSeats.length}</span>
+            <span className="stat-chip-label">Governing</span>
+          </div>
+          <div className="stat-chip stat-chip--blue">
+            <span className="stat-chip-value">{monitoringSeats.length}</span>
+            <span className="stat-chip-label">Monitoring</span>
+          </div>
+          <div className={`stat-chip ${mandateValid ? "stat-chip--green" : "stat-chip--yellow"}`}>
+            <span className="stat-chip-value">{mandateValid ? "✓" : "!"}</span>
+            <span className="stat-chip-label">Mandate</span>
+          </div>
         </div>
         {portfolio.length === 0
           ? <p className="muted">No portfolio loaded.</p>
@@ -919,11 +993,11 @@ export default function HomePage() {
 
       {/* ── Policy objectives ── */}
       <section className="card">
-        <h2>Policy objectives</h2>
-        <p className="muted">
-          Select up to 2 objectives. Matching parliamentary events earn bonus points on top of standard scoring.
-          {" "}<strong>Selected: {selectedObjectiveIds.length} / 2</strong>
-        </p>
+        <div className="section-head">
+          <h2>Policy objectives</h2>
+          <span className="muted" style={{ fontSize: "0.85rem" }}>{selectedObjectiveIds.length} / 2 selected</span>
+        </div>
+        <p className="muted" style={{ marginTop: "0.25rem" }}>Choose up to 2. Matching events earn bonus points on top of standard scoring.</p>
         <div className="objective-grid">
           {policyObjectives.map((obj) => {
             const active = selectedObjectiveIds.includes(obj.id);
@@ -937,6 +1011,7 @@ export default function HomePage() {
                 tabIndex={0}
                 onKeyDown={(e) => e.key === " " && toggleObjective(obj.id)}
               >
+                <div className="objective-icon" aria-hidden="true">{getObjectiveIcon(obj.name)}</div>
                 <div className="objective-name">{obj.name}</div>
                 <div className="muted objective-desc">{obj.description}</div>
                 <div className="objective-bonus">+{obj.bonus} pts per matching event</div>
@@ -957,38 +1032,40 @@ export default function HomePage() {
         <h2>Score ledger</h2>
         {ledger.length === 0
           ? <p className="muted">No scored entries yet — run a scoring cycle to see results here.</p>
-          : (
-            <table>
-              <thead><tr><th>Week</th><th>Event</th><th>Points</th></tr></thead>
-              <tbody>
-                {ledger.map((entry) => {
-                  const isLeadershipChange = entry.event.includes("leadership_change");
-                  const isAttribLinked = !!entry.attribution_id;
-                  return (
-                    <tr key={entry.id}>
-                      <td>{entry.week}</td>
-                      <td>
-                        {entry.event}
-                        {isLeadershipChange && (
-                          <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", background: "#f39c12", color: "#000", borderRadius: "3px", padding: "1px 5px" }}>
-                            ⚡ Leadership Change
-                          </span>
-                        )}
-                        {isAttribLinked && (
-                          <span style={{ marginLeft: "0.4rem", fontSize: "0.7rem", color: "#7cf0c0" }} title={`Attribution: ${entry.attribution_id}`}>
-                            ✓
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ color: entry.points < 0 ? "#ff9a9a" : "#7cf0c0", fontWeight: 600 }}>
-                        {entry.points > 0 ? `+${entry.points}` : entry.points}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )
+          : ledgerByWeek.map(([week, entries]) => (
+            <div key={week}>
+              <div className="ledger-week-header">
+                <span className="ledger-week-label">Week {week}</span>
+                <span className={`ledger-week-total ${weekTotals[week] >= 0 ? "point-pos" : "point-neg"}`}>
+                  {weekTotals[week] > 0 ? `+${weekTotals[week]}` : weekTotals[week]} pts
+                </span>
+              </div>
+              {entries.map((entry) => {
+                const isLeadershipChange = entry.event.includes("leadership_change");
+                const isAttribLinked = !!entry.attribution_id;
+                return (
+                  <div key={entry.id} className="ledger-entry">
+                    <span className="ledger-event">
+                      {entry.event}
+                      {isLeadershipChange && (
+                        <span style={{ marginLeft: "0.45rem", fontSize: "0.72rem", background: "#f39c12", color: "#000", borderRadius: "3px", padding: "1px 5px" }}>
+                          ⚡ Leadership
+                        </span>
+                      )}
+                      {isAttribLinked && (
+                        <span style={{ marginLeft: "0.4rem", fontSize: "0.7rem", color: "#7cf0c0" }} title={`Attribution: ${entry.attribution_id}`}>
+                          ✓
+                        </span>
+                      )}
+                    </span>
+                    <span className={`ledger-points ${entry.points >= 0 ? "point-pos" : "point-neg"}`}>
+                      {entry.points > 0 ? `+${entry.points}` : entry.points}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ))
         }
       </section>
 
@@ -1017,6 +1094,7 @@ export default function HomePage() {
 
       {notice && <p className="muted" style={{ marginTop: "1rem" }}>{notice}</p>}
     </main>
+    </>
   );
 }
 
@@ -1042,76 +1120,66 @@ function MPPicker({
     [benchSignals],
   );
   return (
-    <div style={{ marginTop: "1rem" }}>
-      <table>
-        <thead>
-          <tr><th>Seat</th><th>Politician</th><th>Role</th><th>Party</th><th>Jurisdiction</th><th></th></tr>
-        </thead>
-        <tbody>
-          {portfolio.map((seat) => {
-            const editing = editingSeatSlot === seat.slot;
-            const hint    = jurisdictionHintForSlot(seat.slot);
-            const signal  = seat.lineup_status === "bench" ? signalByPoliticianId[seat.asset_id] : undefined;
-            // Filter out pending/retired for assignment; keep ineligible visible (with badge)
-            const options = (hint
-              ? allMPs.filter((m) => m.jurisdiction.toLowerCase() === hint)
-              : allMPs
-            ).filter((m) => m.status !== "pending" && m.status !== "retired");
-            return (
-              <Fragment key={seat.roster_slot_id}>
-                <tr>
-                  <td>{seat.slot_label}</td>
-                  <td>
-                    {seat.asset_name}
-                    {signal && signal.article_count > 0 && (
-                      <span
-                        title={signal.top_story_title ?? "Active in news today"}
-                        style={{ marginLeft: "0.4rem", fontSize: "0.72rem", background: "rgba(255,166,0,0.2)", color: "#ffa600", border: "1px solid rgba(255,166,0,0.4)", borderRadius: "4px", padding: "1px 5px", fontWeight: 600, cursor: "default" }}
+    <div className="mp-card-grid">
+      {portfolio.map((seat) => {
+        const editing  = editingSeatSlot === seat.slot;
+        const hint     = jurisdictionHintForSlot(seat.slot);
+        const signal   = seat.lineup_status === "bench" ? signalByPoliticianId[seat.asset_id] : undefined;
+        const options  = (hint
+          ? allMPs.filter((m) => m.jurisdiction.toLowerCase() === hint)
+          : allMPs
+        ).filter((m) => m.status !== "pending" && m.status !== "retired");
+        const initials = seat.asset_name.split(" ").map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+        const partyBg  = PARTY_COLOURS[seat.party] ?? PARTY_COLOURS.independent;
+        return (
+          <div key={seat.roster_slot_id} className={`mp-card${seat.lineup_status === "bench" ? " mp-card--bench" : ""}`}>
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+              <div className="mp-avatar" style={{ background: partyBg }} aria-label={`${seat.asset_name} — ${seat.party}`}>{initials}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mp-card-name">{seat.asset_name}</div>
+                <div className="mp-card-role">{seat.asset_type}</div>
+                <div className="mp-card-meta">
+                  <PartyBadge party={seat.party} />
+                  <span style={{ fontSize: "0.78rem", color: "rgba(185,211,255,0.6)" }}>{seat.jurisdiction}</span>
+                  {signal && signal.article_count > 0 && (
+                    <span className="trending-hot" aria-label={signal.top_story_title ?? "Active in news today"}>
+                      📰 {signal.article_count}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="mp-card-footer">
+              <span className="mp-seat-label">{seat.slot_label}</span>
+              {editing ? (
+                <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flex: 1, minWidth: 0 }}>
+                  <select
+                    style={{ flex: 1, minWidth: 0 }}
+                    defaultValue=""
+                    onChange={(e) => { if (e.target.value) void onAssign(seat.slot, e.target.value); }}
+                  >
+                    <option value="" disabled>{hint ? `${hint.toUpperCase()} (${options.length})` : `All (${options.length})`}</option>
+                    {options.map((mp) => (
+                      <option
+                        key={mp.id}
+                        value={mp.id}
+                        disabled={mp.status === "ineligible"}
+                        style={mp.status === "ineligible" ? { color: "#7f8c8d" } : undefined}
                       >
-                        📰 {signal.article_count}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{seat.asset_type}</td>
-                  <td><PartyBadge party={seat.party} /></td>
-                  <td>{seat.jurisdiction}</td>
-                  <td>
-                    <button type="button" onClick={() => setEditingSeatSlot(editing ? null : seat.slot)}>
-                      {editing ? "Cancel" : "Change"}
-                    </button>
-                  </td>
-                </tr>
-                {editing && (
-                  <tr>
-                    <td colSpan={6}>
-                      <div className="mp-picker-row">
-                        <span className="muted">{hint ? `${hint.toUpperCase()} politicians` : `All politicians`} ({options.length})</span>
-                        <select
-                          defaultValue=""
-                          onChange={(e) => { if (e.target.value) void onAssign(seat.slot, e.target.value); }}
-                        >
-                          <option value="" disabled>Select a politician…</option>
-                          {options.map((mp) => (
-                            <option
-                              key={mp.id}
-                              value={mp.id}
-                              disabled={mp.status === "ineligible"}
-                              style={mp.status === "ineligible" ? { color: "#7f8c8d" } : undefined}
-                            >
-                              {mp.full_name} · {mp.current_role || mp.party} · {mp.jurisdiction}
-                              {mp.status === "ineligible" ? " ⚠ Ineligible" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+                        {mp.full_name} · {mp.current_role || mp.party} · {mp.jurisdiction}
+                        {mp.status === "ineligible" ? " ⚠ Ineligible" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setEditingSeatSlot(null)}>✕</button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setEditingSeatSlot(seat.slot)}>Change</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1132,46 +1200,43 @@ function MandateEditor({
   savingMandate: boolean;
   toggleSeat: (id: number, governing: boolean) => void;
 }) {
-  function SeatTable({ seats, isGoverning }: { seats: PortfolioSeat[]; isGoverning: boolean }) {
-    return (
-      <table>
-        <thead><tr><th>Position</th><th>MP</th><th>Party</th><th>Action</th></tr></thead>
-        <tbody>
-          {seats.map((s) => (
-            <tr key={s.roster_slot_id}>
-              <td>{s.slot_label}</td>
-              <td>{s.asset_name}</td>
-              <td>
-                <span className="party-badge" style={{ background: PARTY_COLOURS_CONST[s.party] ?? PARTY_COLOURS_CONST.independent }}>
-                  {s.party}
-                </span>
-              </td>
-              <td>
-                <button
-                  type="button"
-                  onClick={() => toggleSeat(s.roster_slot_id, !isGoverning)}
-                  disabled={savingMandate || (isGoverning && governingSeats.length <= 1)}
-                >
-                  {isGoverning ? "Move to monitoring" : "Move to governing"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  }
-
+  const allSeats = [...governingSeats, ...monitoringSeats];
   return (
-    <div className="grid-two">
-      <div>
-        <h3>Governing seats</h3>
-        <SeatTable seats={governingSeats} isGoverning={true} />
-      </div>
-      <div>
-        <h3>Monitoring seats</h3>
-        <SeatTable seats={monitoringSeats} isGoverning={false} />
-      </div>
+    <div className="mandate-slot-grid">
+      {allSeats.map((seat) => {
+        const isActive = seat.lineup_status === "active";
+        const canDeactivate = !isActive || governingSeats.length > 1;
+        return (
+          <div
+            key={seat.roster_slot_id}
+            className={`mandate-slot${isActive ? " mandate-slot--active" : " mandate-slot--bench"}`}
+            onClick={() => { if (!savingMandate && canDeactivate) toggleSeat(seat.roster_slot_id, !isActive); }}
+            role="button"
+            aria-label={`${isActive ? "Move to bench" : "Activate"}: ${seat.asset_name}`}
+            aria-pressed={isActive}
+            aria-disabled={savingMandate || !canDeactivate}
+            tabIndex={savingMandate || !canDeactivate ? -1 : 0}
+            onKeyDown={(e) => {
+              if ((e.key === " " || e.key === "Enter") && !savingMandate && canDeactivate) {
+                toggleSeat(seat.roster_slot_id, !isActive);
+              }
+            }}
+          >
+            <div className={`mandate-slot-status mandate-slot-status--${isActive ? "active" : "bench"}`}>
+              {isActive ? "● Governing" : "○ Bench"}
+            </div>
+            <div className="mandate-slot-name">{seat.asset_name}</div>
+            <div className="mandate-slot-label">{seat.slot_label}</div>
+            <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.2rem" }}>
+              <span className="party-badge" style={{ background: PARTY_COLOURS_CONST[seat.party] ?? PARTY_COLOURS_CONST.independent }}>
+                {seat.party}
+              </span>
+              <span style={{ fontSize: "0.72rem", color: "rgba(185,211,255,0.45)" }}>{seat.jurisdiction}</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
+
