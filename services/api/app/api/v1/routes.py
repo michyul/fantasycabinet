@@ -6,11 +6,13 @@ from pydantic import BaseModel
 from app.api.v1.schemas import (
     AuditLogOut,
     AttributionRunOut,
+    BenchSignalOut,
     CabinetCreate,
     CabinetOut,
     CabinetScopeCreate,
     CabinetScopeOut,
     CabinetScopeUpdate,
+    DailyDigestOut,
     DataSourceOut,
     DisputeCreate,
     DisputeOut,
@@ -49,6 +51,7 @@ from app.api.v1.schemas import (
     UserCreate,
     UserProfile,
     UserUpdate,
+    WeekThemeOut,
 )
 from app.api.v1.persistent_store import POLICY_OBJECTIVES, PORTFOLIO_SEAT_LABELS, roles_for_user, store
 
@@ -253,6 +256,28 @@ def cabinet_scope_audit_log(scope_id: str) -> dict[str, list[AuditLogOut]]:
     return league_audit_log(scope_id)
 
 
+@router.get("/cabinet-scopes/{scope_id}/week-theme")
+def get_week_theme(scope_id: str) -> WeekThemeOut | None:
+    """Return the current week's modifier/theme for this cabinet scope, or null if none is active."""
+    league = _assert_league_exists(scope_id)
+    week = league.current_week
+    cfg = store.get_system_config()
+    week_modifiers = cfg.get("week_modifiers")
+    if not isinstance(week_modifiers, dict):
+        return None
+    mod = week_modifiers.get(str(week))
+    if not mod:
+        return None
+    return WeekThemeOut(
+        week=week,
+        label=mod.get("label", ""),
+        description=mod.get("description", ""),
+        multipliers=mod.get("multipliers", {}),
+        asset_multipliers=mod.get("asset_multipliers", {}),
+        event_type_whitelist=mod.get("event_type_whitelist"),
+    )
+
+
 @router.post("/cabinet-scopes/{scope_id}/disputes", status_code=status.HTTP_201_CREATED)
 def create_cabinet_scope_dispute(
     scope_id: str,
@@ -318,6 +343,20 @@ def get_cabinet_policy_objectives(cabinet_id: str) -> PolicySelectionsOut:
 def set_cabinet_policy_objectives(cabinet_id: str, payload: PolicySelectionRequest) -> PolicySelectionsOut:
     saved = store.set_cabinet_policy_objectives(cabinet_id, payload.objective_ids)
     return PolicySelectionsOut(cabinet_id=cabinet_id, items=saved)
+
+
+@router.get("/cabinets/{cabinet_id}/bench-signals")
+def get_bench_signals(cabinet_id: str) -> dict[str, list[BenchSignalOut]]:
+    """Return daily attribution activity for each bench (monitoring) politician."""
+    signals = store.compute_bench_signals(cabinet_id)
+    return {"items": [BenchSignalOut(**s) for s in signals]}
+
+
+@router.get("/cabinets/{cabinet_id}/daily-digest")
+def get_daily_digest(cabinet_id: str) -> DailyDigestOut:
+    """Return today's top stories, active MP activity, and bench alerts in one call."""
+    digest = store.daily_digest(cabinet_id)
+    return DailyDigestOut(**digest)
 
 
 @router.post("/internal/events/ingest")

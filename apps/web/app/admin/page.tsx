@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -711,6 +712,250 @@ function StoriesPanel() {
   );
 }
 
+// ── Parliamentary Calendar panel ──────────────────────────────────────────────
+
+type WeekModifier = {
+  label: string;
+  description: string;
+  multipliers: Record<string, number>;
+  asset_multipliers: Record<string, number>;
+  event_type_whitelist?: string[];
+};
+
+function ParliamentaryCalendarPanel() {
+  const [modifiers, setModifiers] = useState<Record<string, WeekModifier>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  // Form state for adding/editing a week modifier
+  const [editWeek, setEditWeek] = useState("");
+  const [editLabel, setEditLabel] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editMultipliersRaw, setEditMultipliersRaw] = useState("{}");
+  const [editAssetMultipliersRaw, setEditAssetMultipliersRaw] = useState("{}");
+  const [editWhitelistRaw, setEditWhitelistRaw] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+
+  useEffect(() => { void load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await apiFetch<{ config: Record<string, unknown> }>("/admin/config");
+      const raw = r.config["week_modifiers"];
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        setModifiers(raw as Record<string, WeekModifier>);
+      } else {
+        setModifiers({});
+      }
+    } catch (e) {
+      setErr(`Could not load config: ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openAdd() {
+    setEditWeek(""); setEditLabel(""); setEditDescription("");
+    setEditMultipliersRaw("{}"); setEditAssetMultipliersRaw("{}"); setEditWhitelistRaw("");
+    setFormOpen(true); setMsg(""); setErr("");
+  }
+
+  function openEdit(week: string, mod: WeekModifier) {
+    setEditWeek(week);
+    setEditLabel(mod.label);
+    setEditDescription(mod.description);
+    setEditMultipliersRaw(JSON.stringify(mod.multipliers ?? {}));
+    setEditAssetMultipliersRaw(JSON.stringify(mod.asset_multipliers ?? {}));
+    setEditWhitelistRaw((mod.event_type_whitelist ?? []).join(", "));
+    setFormOpen(true); setMsg(""); setErr("");
+  }
+
+  async function saveModifier() {
+    const week = editWeek.trim();
+    const weekNum = Number(week);
+    if (!week || !Number.isInteger(weekNum) || weekNum < 1) { setErr("Enter a valid positive integer week number."); return; }
+    let multipliers: Record<string, number>;
+    let asset_multipliers: Record<string, number>;
+    try { multipliers = JSON.parse(editMultipliersRaw) as Record<string, number>; }
+    catch (e) { setErr(`Multipliers must be valid JSON: ${(e as Error).message}`); return; }
+    try { asset_multipliers = JSON.parse(editAssetMultipliersRaw) as Record<string, number>; }
+    catch (e) { setErr(`Asset multipliers must be valid JSON: ${(e as Error).message}`); return; }
+    const whitelist = editWhitelistRaw.trim()
+      ? editWhitelistRaw.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined;
+
+    const newEntry: WeekModifier = { label: editLabel, description: editDescription, multipliers, asset_multipliers };
+    if (whitelist) newEntry.event_type_whitelist = whitelist;
+
+    const updated = { ...modifiers, [week]: newEntry };
+    setSaving(true); setMsg(""); setErr("");
+    try {
+      await apiFetch<unknown>("/admin/config", {
+        method: "PATCH",
+        body: JSON.stringify({ key: "week_modifiers", value: updated }),
+      });
+      setModifiers(updated);
+      setMsg(`Week ${week} modifier saved.`);
+      setFormOpen(false);
+    } catch (e) {
+      setErr(`Save failed: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteModifier(week: string) {
+    const updated = { ...modifiers };
+    delete updated[week];
+    setSaving(true); setMsg(""); setErr("");
+    try {
+      await apiFetch<unknown>("/admin/config", {
+        method: "PATCH",
+        body: JSON.stringify({ key: "week_modifiers", value: updated }),
+      });
+      setModifiers(updated);
+      setMsg(`Week ${week} modifier removed.`);
+    } catch (e) {
+      setErr(`Delete failed: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const weekIcon = (label: string) => {
+    const l = label.toLowerCase();
+    if (l.includes("budget")) return "🏛️";
+    if (l.includes("opposition")) return "⚔️";
+    if (l.includes("prorogation")) return "🔔";
+    return "📅";
+  };
+
+  return (
+    <div className="card">
+      <SectionHeader title="Parliamentary Calendar" />
+      <p className="muted" style={{ margin: "0 0 0.75rem", fontSize: "0.875rem" }}>
+        Map game weeks to special parliamentary events. Modifiers affect scoring multipliers and
+        event-type whitelists during those weeks.
+      </p>
+
+      {loading ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <>
+          {Object.keys(modifiers).length === 0 ? (
+            <p className="muted">No week modifiers configured yet.</p>
+          ) : (
+            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Week</th>
+                    <th>Label</th>
+                    <th>Description</th>
+                    <th>Multipliers</th>
+                    <th>Whitelist</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(modifiers)
+                    .sort(([a], [b]) => Number(a) - Number(b))
+                    .map(([week, mod]) => (
+                      <tr key={week}>
+                        <td style={{ fontWeight: 700, textAlign: "center" }}>{weekIcon(mod.label)} {week}</td>
+                        <td style={{ fontWeight: 600, color: "#e0eaff" }}>{mod.label}</td>
+                        <td style={{ fontSize: "0.82rem", color: "rgba(185,211,255,0.8)", maxWidth: "220px" }}>{mod.description}</td>
+                        <td style={{ fontSize: "0.8rem" }}>
+                          {Object.entries(mod.multipliers ?? {}).map(([k, v]) => (
+                            <span key={k} style={{ display: "inline-block", marginRight: "0.3rem", background: "rgba(124,240,192,0.12)", borderRadius: "3px", padding: "0 5px", color: "#7cf0c0" }}>
+                              {k} ×{v}
+                            </span>
+                          ))}
+                          {Object.entries(mod.asset_multipliers ?? {}).map(([k, v]) => (
+                            <span key={k} style={{ display: "inline-block", marginRight: "0.3rem", background: "rgba(255,200,100,0.1)", borderRadius: "3px", padding: "0 5px", color: "#ffd97d" }}>
+                              {k} ×{v}
+                            </span>
+                          ))}
+                        </td>
+                        <td style={{ fontSize: "0.8rem", color: "#ff9a9a" }}>
+                          {mod.event_type_whitelist ? mod.event_type_whitelist.join(", ") : "—"}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "0.4rem" }}>
+                            <button type="button" onClick={() => openEdit(week, mod)} disabled={saving} style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem" }}>Edit</button>
+                            <button type="button" onClick={() => void deleteModifier(week)} disabled={saving} style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem", background: "rgba(255,80,80,0.15)", color: "#ff9a9a" }}>Remove</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!formOpen && (
+            <button type="button" onClick={openAdd} style={{ marginTop: "0.25rem" }}>
+              + Add week modifier
+            </button>
+          )}
+
+          {formOpen && (
+            <div className="card" style={{ margin: "1rem 0 0", padding: "1rem 1.25rem", background: "rgba(24,48,80,0.6)" }}>
+              <h3 style={{ margin: "0 0 0.75rem", fontSize: "1rem" }}>
+                {editWeek && modifiers[editWeek] ? `Edit Week ${editWeek} Modifier` : "New Week Modifier"}
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.6rem 1rem" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem" }}>
+                  Week number *
+                  <input
+                    type="number"
+                    min={1}
+                    value={editWeek}
+                    onChange={(e) => setEditWeek(e.target.value)}
+                    placeholder="e.g. 3"
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem" }}>
+                  Label *
+                  <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder="e.g. Budget Week" />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem", gridColumn: "span 2" }}>
+                  Description
+                  <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} placeholder="Brief description shown in the banner" />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem" }}>
+                  Event-type multipliers (JSON)
+                  <input value={editMultipliersRaw} onChange={(e) => setEditMultipliersRaw(e.target.value)} placeholder={'{\"policy\": 1.5}'} style={{ fontFamily: "monospace", fontSize: "0.82rem" }} />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem" }}>
+                  Asset-type multipliers (JSON)
+                  <input value={editAssetMultipliersRaw} onChange={(e) => setEditAssetMultipliersRaw(e.target.value)} placeholder={'{\"opposition\": 1.5}'} style={{ fontFamily: "monospace", fontSize: "0.82rem" }} />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem" }}>
+                  Event-type whitelist (comma-separated, blank = all)
+                  <input value={editWhitelistRaw} onChange={(e) => setEditWhitelistRaw(e.target.value)} placeholder="parliamentary, intergovernmental" />
+                </label>
+              </div>
+              <div className="row" style={{ marginTop: "0.75rem", gap: "0.5rem" }}>
+                <button type="button" onClick={() => void saveModifier()} disabled={saving}>
+                  {saving ? "Saving…" : "Save modifier"}
+                </button>
+                <button type="button" onClick={() => { setFormOpen(false); setErr(""); }} disabled={saving} style={{ background: "rgba(255,255,255,0.06)" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      <Notice msg={msg} />
+      <Notice msg={err} error />
+    </div>
+  );
+}
+
 // ── Data Sources panel ────────────────────────────────────────────────────────
 
 function DataSourcesPanel() {
@@ -792,7 +1037,7 @@ function DataSourcesPanel() {
 export default function AdminPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [activeTab, setActiveTab] = useState<"politicians" | "stories" | "sources" | "config">(
+  const [activeTab, setActiveTab] = useState<"politicians" | "stories" | "sources" | "config" | "calendar">(
     "politicians",
   );
 
@@ -828,7 +1073,7 @@ export default function AdminPage() {
       <main>
         <h1>Admin Centre</h1>
         <p className="error">You need the commissioner role to access this page.</p>
-        <a href="/">← Back to game</a>
+        <Link href="/">← Back to game</Link>
       </main>
     );
   }
@@ -838,6 +1083,7 @@ export default function AdminPage() {
     { id: "stories", label: "News Stories" },
     { id: "sources", label: "Data Sources" },
     { id: "config", label: "System Config" },
+    { id: "calendar", label: "📅 Parliamentary Calendar" },
   ];
 
   return (
@@ -861,7 +1107,7 @@ export default function AdminPage() {
             </p>
           )}
         </div>
-        <a href="/" style={{ fontSize: "0.875rem" }}>← Back to game</a>
+        <Link href="/" style={{ fontSize: "0.875rem" }}>← Back to game</Link>
       </div>
 
       {/* Bootstrap at top — always visible */}
@@ -905,6 +1151,7 @@ export default function AdminPage() {
       {activeTab === "stories" && <StoriesPanel />}
       {activeTab === "sources" && <DataSourcesPanel />}
       {activeTab === "config" && <SystemConfigPanel />}
+      {activeTab === "calendar" && <ParliamentaryCalendarPanel />}
     </main>
   );
 }

@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -353,6 +353,16 @@ class PersistentStore:
             connection.exec_driver_sql(
                 "INSERT INTO system_config (key, value, updated_at, updated_by) "
                 "VALUES ('story_rescore_threshold', '1.5', NOW(), 'system') "
+                "ON CONFLICT (key) DO NOTHING"
+            )
+            # Seed week_modifiers parliamentary calendar if not present
+            connection.exec_driver_sql(
+                "INSERT INTO system_config (key, value, updated_at, updated_by) "
+                "VALUES ('week_modifiers', "
+                "'{\"3\": {\"label\": \"Budget Week\", \"description\": \"The federal budget drops — policy and executive events score higher.\", \"multipliers\": {\"policy\": 1.5, \"executive\": 1.3}, \"asset_multipliers\": {}}, "
+                "\"7\": {\"label\": \"Opposition Day\", \"description\": \"Opposition gets the floor — opposition asset types score 50%% more.\", \"multipliers\": {}, \"asset_multipliers\": {\"opposition\": 1.5}}, "
+                "\"10\": {\"label\": \"Prorogation\", \"description\": \"Parliament is prorogued — only parliamentary events score.\", \"multipliers\": {}, \"asset_multipliers\": {}, \"event_type_whitelist\": [\"parliamentary\", \"intergovernmental\"]}}',"
+                " NOW(), 'system') "
                 "ON CONFLICT (key) DO NOTHING"
             )
             # Rename legacy scope names
@@ -1202,6 +1212,139 @@ class PersistentStore:
     def get_story(self, story_id: str) -> NewsStoryModel | None:
         with Session(self.engine) as session:
             return session.get(NewsStoryModel, story_id)
+
+    def compute_bench_signals(self, team_id: str) -> list[dict]:
+        """Return attribution activity for each bench (monitoring) politician in the last 24h."""
+        cutoff = utcnow() - timedelta(hours=24)
+        with Session(self.engine) as session:
+            bench_slots = list(
+                session.scalars(
+                    select(RosterSlotModel).where(
+                        RosterSlotModel.team_id == team_id,
+                        RosterSlotModel.lineup_status == "bench",
+                    )
+                )
+            )
+            results: list[dict] = []
+            for slot in bench_slots:
+                pol = session.get(PoliticianModel, slot.asset_id)
+                if pol is None:
+                    continue
+                article_count = session.scalar(
+                    select(func.count(EventAttributionModel.id))
+                    .join(PoliticalEventModel, PoliticalEventModel.id == EventAttributionModel.event_id)
+                    .where(
+                        EventAttributionModel.politician_id == pol.id,
+                        PoliticalEventModel.occurred_at >= cutoff,
+                    )
+                ) or 0
+                story_ids = list(
+                    session.scalars(
+                        select(PoliticalEventModel.story_id)
+                        .join(EventAttributionModel, EventAttributionModel.event_id == PoliticalEventModel.id)
+                        .where(
+                            EventAttributionModel.politician_id == pol.id,
+                            PoliticalEventModel.occurred_at >= cutoff,
+                            PoliticalEventModel.story_id.isnot(None),
+                        )
+                        .distinct()
+                    )
+                )
+                top_story = None
+                if story_ids:
+                    top_story = session.scalar(
+                        select(NewsStoryModel)
+                        .where(NewsStoryModel.id.in_(story_ids))
+                        .order_by(NewsStoryModel.significance.desc())
+                        .limit(1)
+                    )
+                results.append({
+                    "politician_id": pol.id,
+                    "politician_name": pol.full_name,
+                    "article_count": article_count,
+                    "top_significance": top_story.significance if top_story else 0.0,
+                    "top_story_title": top_story.canonical_title if top_story else None,
+                    "top_story_id": top_story.id if top_story else None,
+                })
+            return results
+
+    def daily_digest(self, team_id: str) -> dict:
+        """Return a single digest of today's activity for a cabinet."""
+        cutoff = utcnow() - timedelta(hours=24)
+        with Session(self.engine) as session:
+            top_stories = list(
+                session.scalars(
+                    select(NewsStoryModel)
+                    .where(NewsStoryModel.last_updated_at >= cutoff)
+                    .order_by(NewsStoryModel.significance.desc())
+                    .limit(5)
+                )
+            )
+            slots = list(
+                session.scalars(select(RosterSlotModel).where(RosterSlotModel.team_id == team_id))
+            )
+            active_asset_ids = [s.asset_id for s in slots if s.lineup_status == "active"]
+            bench_asset_ids = [s.asset_id for s in slots if s.lineup_status == "bench"]
+            total_articles_today: int = session.scalar(
+                select(func.count(PoliticalEventModel.id)).where(
+                    PoliticalEventModel.occurred_at >= cutoff
+                )
+            ) or 0
+            active_mps_in_news: list[dict] = []
+            for asset_id in active_asset_ids:
+                pol = session.get(PoliticianModel, asset_id)
+                if pol is None:
+                    continue
+                count: int = session.scalar(
+                    select(func.count(EventAttributionModel.id))
+                    .join(PoliticalEventModel, PoliticalEventModel.id == EventAttributionModel.event_id)
+                    .where(
+                        EventAttributionModel.politician_id == asset_id,
+                        PoliticalEventModel.occurred_at >= cutoff,
+                    )
+                ) or 0
+                if count > 0:
+                    active_mps_in_news.append({
+                        "politician_id": asset_id,
+                        "politician_name": pol.full_name,
+                        "article_count": count,
+                    })
+            bench_alerts: list[dict] = []
+            for asset_id in bench_asset_ids:
+                pol = session.get(PoliticianModel, asset_id)
+                if pol is None:
+                    continue
+                count = session.scalar(
+                    select(func.count(EventAttributionModel.id))
+                    .join(PoliticalEventModel, PoliticalEventModel.id == EventAttributionModel.event_id)
+                    .where(
+                        EventAttributionModel.politician_id == asset_id,
+                        PoliticalEventModel.occurred_at >= cutoff,
+                    )
+                ) or 0
+                if count > 0:
+                    bench_alerts.append({
+                        "politician_id": asset_id,
+                        "politician_name": pol.full_name,
+                        "article_count": count,
+                        "in_news": True,
+                    })
+            return {
+                "top_stories": [
+                    {
+                        "id": s.id,
+                        "canonical_title": s.canonical_title,
+                        "significance": s.significance,
+                        "event_type": s.event_type,
+                        "jurisdiction": s.jurisdiction,
+                        "article_count": s.article_count,
+                    }
+                    for s in top_stories
+                ],
+                "active_mps_in_news": active_mps_in_news,
+                "bench_alerts": bench_alerts,
+                "total_articles_today": total_articles_today,
+            }
 
     def get_unscored_stories(self, week: int | None = None) -> list[NewsStoryModel]:
         """Return stories ready for initial scoring (have attributions, not yet scored)."""
