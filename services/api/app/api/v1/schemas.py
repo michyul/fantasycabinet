@@ -114,6 +114,8 @@ class StandingsRow(BaseModel):
     cabinet_name: str
     total_points: int
     rank: int
+    participation_streak: int = 0
+    positive_streak: int = 0
 
 
 class StandingsOut(BaseModel):
@@ -364,6 +366,26 @@ class WeekThemeOut(BaseModel):
     multipliers: dict = Field(default_factory=dict)
     asset_multipliers: dict = Field(default_factory=dict)
     event_type_whitelist: list[str] | None = None
+
+
+class AchievementOut(BaseModel):
+    id: str
+    team_id: str
+    achievement_id: str
+    name: str
+    description: str
+    earned_at: datetime
+    week: int
+    metadata: dict = Field(default_factory=dict)
+
+
+class ManagerStatsOut(BaseModel):
+    team_id: str
+    participation_streak: int = 0
+    positive_streak: int = 0
+    longest_participation_streak: int = 0
+    longest_positive_streak: int = 0
+    updated_at: datetime | None = None
 
 
 # ── Canonical domain-language aliases (domain-language-contract.md) ───────────────

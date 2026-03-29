@@ -4,6 +4,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.api.v1.schemas import (
+    AchievementOut,
     AuditLogOut,
     AttributionRunOut,
     BenchSignalOut,
@@ -24,6 +25,7 @@ from app.api.v1.schemas import (
     LedgerEntryOut,
     LineupUpdateOut,
     LineupUpdateRequest,
+    ManagerStatsOut,
     MandateUpdateOut,
     MandateUpdateRequest,
     MPOut,
@@ -359,6 +361,44 @@ def get_daily_digest(cabinet_id: str) -> DailyDigestOut:
     return DailyDigestOut(**digest)
 
 
+@router.get("/cabinets/{cabinet_id}/achievements")
+def get_cabinet_achievements(cabinet_id: str) -> dict[str, list[AchievementOut]]:
+    """Return all achievements earned by this cabinet."""
+    ach_defs = {d["id"]: d for d in store.ACHIEVEMENT_DEFS}
+    achievements = store.get_cabinet_achievements(cabinet_id)
+    return {
+        "items": [
+            AchievementOut(
+                id=a.id,
+                team_id=a.team_id,
+                achievement_id=a.achievement_id,
+                name=ach_defs.get(a.achievement_id, {}).get("name", a.achievement_id),
+                description=ach_defs.get(a.achievement_id, {}).get("description", ""),
+                earned_at=a.earned_at,
+                week=a.week,
+                metadata=a.metadata_json or {},
+            )
+            for a in achievements
+        ]
+    }
+
+
+@router.get("/cabinets/{cabinet_id}/stats")
+def get_cabinet_stats(cabinet_id: str) -> ManagerStatsOut:
+    """Return streak stats for this cabinet."""
+    stats = store.get_cabinet_stats(cabinet_id)
+    if stats is None:
+        return ManagerStatsOut(team_id=cabinet_id)
+    return ManagerStatsOut(
+        team_id=stats.team_id,
+        participation_streak=stats.participation_streak,
+        positive_streak=stats.positive_streak,
+        longest_participation_streak=stats.longest_participation_streak,
+        longest_positive_streak=stats.longest_positive_streak,
+        updated_at=stats.updated_at,
+    )
+
+
 @router.post("/internal/events/ingest")
 def ingest_events(payload: IngestEventsRequest) -> IngestEventsOut:
     received, inserted, duplicates, inserted_ids = store.ingest_events(payload.events)
@@ -555,8 +595,15 @@ def standings(league_id: str) -> StandingsOut:
     league = _assert_league_exists(league_id)
     ranked = store.standings(league_id)
     items = [
-        StandingsRow(cabinet_id=team.id, cabinet_name=team.name, total_points=total_points, rank=index + 1)
-        for index, (team, total_points) in enumerate(ranked)
+        StandingsRow(
+            cabinet_id=team.id,
+            cabinet_name=team.name,
+            total_points=total_points,
+            rank=index + 1,
+            participation_streak=stats.participation_streak if stats else 0,
+            positive_streak=stats.positive_streak if stats else 0,
+        )
+        for index, (team, total_points, stats) in enumerate(ranked)
     ]
     return StandingsOut(scope_id=league_id, week=league.current_week - 1, items=items)
 
