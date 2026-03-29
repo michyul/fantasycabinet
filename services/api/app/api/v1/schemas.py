@@ -319,6 +319,44 @@ class PolicySelectionsOut(BaseModel):
     items: list[str]  # objective IDs
 
 
+class BenchSignalOut(BaseModel):
+    politician_id: str
+    politician_name: str
+    article_count: int
+    top_significance: float
+    top_story_title: str | None = None
+    top_story_id: str | None = None
+
+
+class DailyDigestTopStory(BaseModel):
+    id: str
+    canonical_title: str
+    significance: float
+    event_type: str
+    jurisdiction: str
+    article_count: int
+
+
+class DailyDigestMPActivity(BaseModel):
+    politician_id: str
+    politician_name: str
+    article_count: int
+
+
+class DailyDigestBenchAlert(BaseModel):
+    politician_id: str
+    politician_name: str
+    article_count: int
+    in_news: bool
+
+
+class DailyDigestOut(BaseModel):
+    top_stories: list[DailyDigestTopStory]
+    active_mps_in_news: list[DailyDigestMPActivity]
+    bench_alerts: list[DailyDigestBenchAlert]
+    total_articles_today: int
+
+
 # ── Canonical domain-language aliases (domain-language-contract.md) ───────────────
 # These names are used in all new API routes and UI.
 CabinetScopeCreate = LeagueCreate
